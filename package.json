@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node test/worker.test.mjs",
+    "build:dash": "cd dash && bun run build",
     "deploy": "wrangler deploy"
   }
 }

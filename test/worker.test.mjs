@@ -206,7 +206,7 @@ const ui = await check('dash: UI served when authed', new Request(DASH + '/', { 
 const uiBody = await ui.text()
 console.log(uiBody.includes('<title>sendup</title>') ? 'ok   dash: UI is html' : 'FAIL dash: UI body')
 console.log(
-  !uiBody.includes('__BASE__') && uiBody.includes("BASE = 'example.com'")
+  !uiBody.includes('__BASE__') && uiBody.includes('window.__SENDUP_BASE__="example.com"')
     ? 'ok   dash: base domain injected'
     : 'FAIL dash: base domain not substituted'
 )
