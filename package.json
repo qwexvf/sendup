@@ -1,0 +1,10 @@
+{
+  "name": "devdox",
+  "private": true,
+  "type": "module",
+  "bin": { "devdox": "./bin/devdox" },
+  "scripts": {
+    "test": "node test/worker.test.mjs",
+    "deploy": "wrangler deploy"
+  }
+}
