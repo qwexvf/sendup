@@ -96,7 +96,7 @@ function DeleteDialog({ site, onDeleted }: { site: Site; onDeleted: () => void }
         render={(p) => (
           <Button
             {...p}
-            size="xs"
+            size="base"
             variant="secondary-destructive"
             shape="square"
             title="Delete site"
@@ -106,7 +106,7 @@ function DeleteDialog({ site, onDeleted }: { site: Site; onDeleted: () => void }
           </Button>
         )}
       />
-      <Dialog size="sm" className="p-6">
+      <Dialog size="base" className="p-6">
         <Dialog.Title className="text-lg font-semibold">Delete {site.slug}?</Dialog.Title>
         <Dialog.Description className="mt-2 text-kumo-subtle">
           Removes {site.files} file{site.files === 1 ? '' : 's'} and the URL stops working. This
@@ -174,7 +174,7 @@ function RenameDialog({ site, onRenamed }: { site: Site; onRenamed: (to: string)
         render={(p) => (
           <Button
             {...p}
-            size="xs"
+            size="base"
             shape="square"
             title="Change subdomain"
             aria-label={`Change subdomain for ${site.slug}`}
@@ -314,11 +314,11 @@ function Row({
       </Table.Cell>
 
       <Table.Cell sticky="right">
-        <div className="flex items-center justify-end gap-1.5">
+        <div className="flex items-center justify-end gap-2">
           <Select
             aria-label={`Access for ${site.slug}`}
-            size="xs"
-            className="w-[9.5rem]"
+            size="base"
+            className="w-[11.5rem]"
             value={site.access === 'both' ? 'auth' : site.access}
             disabled={busy}
             onValueChange={setAccess}
@@ -327,7 +327,7 @@ function Row({
           {linkable && (
             <>
               <Button
-                size="xs"
+                size="base"
                 shape="square"
                 title="Copy share link"
                 aria-label={`Copy share link for ${site.slug}`}
@@ -336,11 +336,11 @@ function Row({
               >
                 <LinkIcon />
               </Button>
-              <Button size="xs" aria-label={`Copy 7-day link for ${site.slug}`} disabled={busy} onClick={() => copyLink(7)}>
+              <Button size="base" aria-label={`Copy 7-day link for ${site.slug}`} disabled={busy} onClick={() => copyLink(7)}>
                 7d
               </Button>
               <Button
-                size="xs"
+                size="base"
                 shape="square"
                 title="Revoke every issued link"
                 aria-label={`Revoke every link for ${site.slug}`}
@@ -424,7 +424,7 @@ export function App() {
             />
           </div>
           <Button
-            size="sm"
+            size="base"
             shape="square"
             aria-label="Reload from the server"
             title="Reload"
@@ -459,6 +459,7 @@ export function App() {
       )}
 
       {!error && sites !== null && sites.length > 0 && (
+        <div className="overflow-x-auto">
         <Table>
           <Table.Header>
             <Table.Row>
@@ -483,6 +484,7 @@ export function App() {
             ))}
           </Table.Body>
         </Table>
+        </div>
       )}
     </div>
   )
