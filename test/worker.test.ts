@@ -230,6 +230,9 @@ test('dashboard serves the built UI with the domain injected', async () => {
   expect(body).toContain('<title>sendup</title>')
   expect(body).not.toContain('__BASE__')
   expect(body).toContain(`window.__SENDUP_BASE__="${BASE}"`)
+  // dark unless the visitor has chosen otherwise, decided before first paint
+  expect(body).toContain('data-mode="dark"')
+  expect(body).toContain("localStorage.getItem('sendup:mode')")
 })
 
 test('mutating calls need same-origin proof, not just a password', async () => {

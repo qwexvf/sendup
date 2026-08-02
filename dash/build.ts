@@ -21,14 +21,49 @@ const css = await Bun.file('./node_modules/@cloudflare/kumo/dist/styles/kumo-sta
 // </script> inside the bundle would close the tag early
 const safe = (s: string) => s.replaceAll('</', '<\\/')
 
+// Dark unless the visitor has explicitly chosen light. Applied before first paint so
+// there is no white flash on load.
+const modeBoot = `
+try {
+  var m = localStorage.getItem('sendup:mode')
+  document.documentElement.dataset.mode = m === 'light' ? 'light' : 'dark'
+} catch (e) { document.documentElement.dataset.mode = 'dark' }
+`
+
+// Kumo ships a system stack; these are the same idea with sharper faces preferred when
+// they happen to be installed. Nothing is fetched — a strict CSP blocks external fonts.
+const typography = `
+:root{
+  --font-sans: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system,
+               "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", SFMono-Regular, "Fira Code",
+               Menlo, Consolas, "Liberation Mono", monospace;
+}
+html{ color-scheme: dark }
+html[data-mode="light"]{ color-scheme: light }
+body{
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv02","cv03","cv04","cv11";
+}
+h1,h2,h3{ letter-spacing: -0.011em }
+code,pre,kbd,samp,.tabular-nums{ font-family: var(--font-mono) }
+/* sizes and dates line up in the table */
+table td,table th{ font-variant-numeric: tabular-nums }
+`
+
 const html = `<!doctype html>
-<html lang="en" class="kumo">
+<html lang="en" class="kumo" data-mode="dark" data-theme="kumo">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
+<meta name="color-scheme" content="dark light">
 <title>sendup</title>
+<script>${modeBoot}</script>
 <style>${css}</style>
+<style>${typography}</style>
 </head>
 <body class="bg-kumo text-kumo">
 <div id="root"></div>

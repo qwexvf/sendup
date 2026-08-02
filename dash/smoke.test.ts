@@ -43,7 +43,11 @@ let root: Root | null = null
 let host: HTMLElement | null = null
 
 // the app parks in-flight changes here; leaking them would skew the next test
-beforeEach(() => sessionStorage.clear())
+beforeEach(() => {
+  sessionStorage.clear()
+  localStorage.clear()
+  delete document.documentElement.dataset.mode
+})
 
 afterEach(() => {
   act(() => root?.unmount())
@@ -231,6 +235,28 @@ test('drops the indicator once the server agrees', async () => {
   expect(text()).not.toContain('still reaching the edge')
   expect(text()).not.toContain('edge still catching up')
   expect(sessionStorage.getItem('sendup:pending')).toBeNull()
+})
+
+test('starts dark and remembers a switch to light', async () => {
+  const { text } = await render({
+    sites: SITES,
+    totals: { sites: 2, files: 5, bytes: 1085780 },
+  })
+  expect(text()).toBeTruthy()
+
+  // the boot script sets this in the real document; unset here means the default applies
+  const toLight = document.querySelector('button[aria-label="Switch to light theme"]') as HTMLElement
+  expect(toLight).not.toBeNull()
+
+  await act(async () => toLight.click())
+  expect(document.documentElement.dataset.mode).toBe('light')
+  expect(localStorage.getItem('sendup:mode')).toBe('light')
+
+  const toDark = document.querySelector('button[aria-label="Switch to dark theme"]') as HTMLElement
+  expect(toDark).not.toBeNull()
+  await act(async () => toDark.click())
+  expect(document.documentElement.dataset.mode).toBe('dark')
+  expect(localStorage.getItem('sendup:mode')).toBe('dark')
 })
 
 test('each row exposes a labelled access control', async () => {

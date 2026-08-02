@@ -17,7 +17,9 @@ import {
   ArrowsClockwiseIcon,
   CloudArrowUpIcon,
   LinkIcon,
+  MoonIcon,
   PencilSimpleIcon,
+  SunIcon,
   TrashIcon,
 } from '@phosphor-icons/react'
 
@@ -116,6 +118,27 @@ export function reconcile(sites: Site[]): { sites: Site[]; waiting: number; sync
 
   writePending(keep)
   return { sites: out, waiting: keep.length, syncing }
+}
+
+// Dark is the default; the choice sticks per browser. The initial value is applied by a
+// boot script in the document head so there is no flash before React mounts.
+function useColorMode() {
+  const [mode, setMode] = useState<'dark' | 'light'>(
+    () => (document.documentElement.dataset.mode === 'light' ? 'light' : 'dark')
+  )
+  const toggle = useCallback(() => {
+    setMode((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark'
+      document.documentElement.dataset.mode = next
+      try {
+        localStorage.setItem('sendup:mode', next)
+      } catch {
+        /* private mode — the choice just will not persist */
+      }
+      return next
+    })
+  }, [])
+  return { mode, toggle }
 }
 
 const totalsOf = (sites: Site[]): Totals => ({
@@ -440,6 +463,7 @@ export function App() {
   const [waiting, setWaiting] = useState(0)
   const [syncing, setSyncing] = useState<string[]>([])
   const [error, setError] = useState('')
+  const { mode, toggle } = useColorMode()
   const totals = totalsOf(sites ?? [])
 
   const load = useCallback(async () => {
@@ -511,6 +535,15 @@ export function App() {
             onClick={() => void load()}
           >
             <ArrowsClockwiseIcon />
+          </Button>
+          <Button
+            size="base"
+            shape="square"
+            aria-label={mode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            title={mode === 'dark' ? 'Light theme' : 'Dark theme'}
+            onClick={toggle}
+          >
+            {mode === 'dark' ? <SunIcon /> : <MoonIcon />}
           </Button>
         </div>
       </header>
