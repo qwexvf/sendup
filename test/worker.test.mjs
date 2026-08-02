@@ -67,7 +67,7 @@ const sha256hex = async (s) =>
   [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))]
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
-const auth = { salt: SALT, hash: await sha256hex(SALT + 'devdox:hunter2') }
+const auth = { salt: SALT, hash: await sha256hex(SALT + 'sendup:hunter2') }
 
 put('sec:/index.html', '<h1>secret</h1>', { auth })
 put('sec:/deep/page.html', 'deep', { auth })
@@ -89,22 +89,86 @@ console.log(
     : 'FAIL auth: missing WWW-Authenticate'
 )
 
-await check('auth: wrong password', new Request('https://sec.example.com/', { headers: basic('devdox', 'nope') }), 401)
+await check('auth: wrong password', new Request('https://sec.example.com/', { headers: basic('sendup', 'nope') }), 401)
 await check('auth: wrong user', new Request('https://sec.example.com/', { headers: basic('admin', 'hunter2') }), 401)
 await check('auth: malformed header', new Request('https://sec.example.com/', { headers: { authorization: 'Basic !!!' } }), 401)
 await check('auth: bearer instead of basic', new Request('https://sec.example.com/', { headers: { authorization: 'Bearer x' } }), 401)
-const good = await check('auth: correct credentials', new Request('https://sec.example.com/', { headers: basic('devdox', 'hunter2') }), 200)
+const good = await check('auth: correct credentials', new Request('https://sec.example.com/', { headers: basic('sendup', 'hunter2') }), 200)
 console.log((await good.text()).includes('secret') ? 'ok   auth: body served once authed' : 'FAIL auth: body missing')
 console.log(
-  good.headers.get('cache-control') === 'private, no-store' && good.headers.get('vary') === 'Authorization'
+  good.headers.get('cache-control') === 'private, no-store' &&
+    good.headers.get('vary') === 'Authorization, Cookie'
     ? 'ok   auth: response marked uncacheable'
     : `FAIL auth: cache headers ${good.headers.get('cache-control')} / ${good.headers.get('vary')}`
 )
 
 // a miss on a protected site must not reveal whether the path exists
 await check('auth: miss is gated too', new Request('https://sec.example.com/whatever'), 401)
-await check('auth: miss with credentials 404s', new Request('https://sec.example.com/whatever', { headers: basic('devdox', 'hunter2') }), 404)
+await check('auth: miss with credentials 404s', new Request('https://sec.example.com/whatever', { headers: basic('sendup', 'hunter2') }), 404)
 // public sites keep working untouched
 await check('public site still open', new Request('https://abc.example.com/'), 200)
+
+// ---- signed links ----
+
+const SECRET = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'
+const mint = async (slug, exp) => {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    Uint8Array.from(SECRET.match(/../g).map((h) => parseInt(h, 16))),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${slug}:${exp}`)))
+  return `${exp}.${[...mac.slice(0, 16)].map((b) => b.toString(16).padStart(2, '0')).join('')}`
+}
+
+put('lnk:/index.html', '<h1>link only</h1>', { link: SECRET })
+store.set('__index:lnk', { v: new TextEncoder().encode('').buffer, m: { link: SECRET } })
+// a site carrying both credentials — either should open it
+put('both:/index.html', '<h1>both</h1>', { link: SECRET, auth })
+store.set('__index:both', { v: new TextEncoder().encode('').buffer, m: { link: SECRET, auth } })
+
+const forever = await mint('lnk', 0)
+const expired = await mint('lnk', Math.floor(Date.now() / 1000) - 60)
+const future = await mint('lnk', Math.floor(Date.now() / 1000) + 3600)
+const otherSlug = await mint('sec', 0) // signed for a different site
+
+await check('link: no token', new Request('https://lnk.example.com/'), 403)
+await check('link: garbage token', new Request('https://lnk.example.com/?k=nonsense'), 403)
+await check('link: tampered signature', new Request(`https://lnk.example.com/?k=0.${'0'.repeat(32)}`), 403)
+await check('link: expired token', new Request(`https://lnk.example.com/?k=${expired}`), 403)
+await check('link: token signed for another site', new Request(`https://lnk.example.com/?k=${otherSlug}`), 403)
+await check('link: no basic-auth prompt on link-only site', new Request('https://lnk.example.com/'), 403)
+
+const granted = await check('link: valid token redirects', new Request(`https://lnk.example.com/?k=${forever}`), 302)
+const setCookie = granted.headers.get('set-cookie') || ''
+console.log(
+  setCookie.includes('sendup_link=') && setCookie.includes('HttpOnly') && setCookie.includes('Secure')
+    ? 'ok   link: cookie is HttpOnly + Secure'
+    : `FAIL link: cookie ${setCookie}`
+)
+console.log(
+  !granted.headers.get('location').includes('k=')
+    ? 'ok   link: token stripped from redirect target'
+    : `FAIL link: token left in ${granted.headers.get('location')}`
+)
+
+const cookie = (t) => ({ cookie: `sendup_link=${t}` })
+const viaCookie = await check('link: cookie grants access', new Request('https://lnk.example.com/', { headers: cookie(forever) }), 200)
+console.log((await viaCookie.text()).includes('link only') ? 'ok   link: body served' : 'FAIL link: body missing')
+console.log(
+  viaCookie.headers.get('vary') === 'Authorization, Cookie'
+    ? 'ok   link: varies on Cookie'
+    : `FAIL link: vary ${viaCookie.headers.get('vary')}`
+)
+await check('link: expired cookie rejected', new Request('https://lnk.example.com/', { headers: cookie(expired) }), 403)
+await check('link: dated token still valid', new Request(`https://lnk.example.com/?k=${future}`), 302)
+await check('link: miss is gated too', new Request('https://lnk.example.com/nope'), 403)
+
+// either credential opens a site carrying both
+await check('both: link alone works', new Request('https://both.example.com/', { headers: cookie(await mint('both', 0)) }), 200)
+await check('both: password alone works', new Request('https://both.example.com/', { headers: basic('sendup', 'hunter2') }), 200)
+await check('both: neither is refused with a prompt', new Request('https://both.example.com/'), 401)
 
 process.exit(fail ? 1 : 0)

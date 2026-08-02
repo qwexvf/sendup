@@ -1,8 +1,9 @@
-// devdox — publish static pages to <random>.example.com
+// sendup — publish static pages to <random>.example.com
 package main
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -33,7 +34,7 @@ const (
 var httpClient = &http.Client{Timeout: 120 * time.Second}
 
 func die(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "devdox: "+format+"\n", a...)
+	fmt.Fprintf(os.Stderr, "sendup: "+format+"\n", a...)
 	os.Exit(1)
 }
 
@@ -49,13 +50,13 @@ type Config struct {
 
 func configDir() string {
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
-		return filepath.Join(d, "devdox")
+		return filepath.Join(d, "sendup")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		die("cannot locate home directory: %v", err)
 	}
-	return filepath.Join(home, ".config", "devdox")
+	return filepath.Join(home, ".config", "sendup")
 }
 
 func configPath() string { return filepath.Join(configDir(), "config.json") }
@@ -102,7 +103,7 @@ func (c *Config) require(fields ...string) {
 	}
 	for _, f := range fields {
 		if missing[f] == "" {
-			die("missing %q — run `devdox init` first (or set it in %s)", f, configPath())
+			die("missing %q — run `sendup init` first (or set it in %s)", f, configPath())
 		}
 	}
 }
@@ -222,6 +223,31 @@ func newPassword() string {
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
 
+func newSecret() string {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		die("cannot generate secret: %v", err)
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// mintToken builds "<exp>.<sig>" where exp is unix seconds (0 = never) and sig is the
+// first 16 bytes of HMAC-SHA256(secret, "<slug>:<exp>"). The expiry sits inside the
+// signed message, so a recipient cannot extend their own link.
+func mintToken(secretHex, slug string, exp int64) string {
+	key, err := hex.DecodeString(secretHex)
+	if err != nil {
+		die("stored link secret is corrupt")
+	}
+	mac := hmac.New(sha256.New, key)
+	fmt.Fprintf(mac, "%s:%d", slug, exp)
+	return fmt.Sprintf("%d.%s", exp, hex.EncodeToString(mac.Sum(nil)[:16]))
+}
+
+func linkURL(cfg *Config, slug, token string) string {
+	return fmt.Sprintf("https://%s.%s/?k=%s", slug, cfg.Domain, token)
+}
+
 // hashCreds returns a random salt and sha256(salt + "user:pass"), both hex.
 // The worker recomputes this from the Basic auth header and compares in constant time.
 func hashCreds(user, pass string) (salt, hash string) {
@@ -297,7 +323,7 @@ func collectFiles(target string) []upload {
 		}
 	}
 	if !hasIndex {
-		fmt.Fprintln(os.Stderr, `devdox: warning — no index.html at the root, "/" will 404`)
+		fmt.Fprintln(os.Stderr, `sendup: warning — no index.html at the root, "/" will 404`)
 	}
 	return out
 }
@@ -401,7 +427,7 @@ func cmdInit(args []string) {
 	if cfg.Domain != "" {
 		domain = cfg.Domain
 	}
-	nsTitle := "devdox-sites"
+	nsTitle := "sendup-sites"
 	skipDNS := false
 
 	for i := 0; i < len(args); i++ {
@@ -436,7 +462,7 @@ func cmdInit(args []string) {
 			"  Zone    > Workers Routes     > Edit\n" +
 			"  Zone    > Zone               > Read\n" +
 			"  Zone    > DNS                > Edit   (optional, see --skip-dns)\n" +
-			"then: devdox init --token <TOKEN>   (or export CLOUDFLARE_API_TOKEN=...)")
+			"then: sendup init --token <TOKEN>   (or export CLOUDFLARE_API_TOKEN=...)")
 	}
 
 	// zone + account
@@ -496,7 +522,42 @@ func cmdInit(args []string) {
 	initDNS(cfg, skipDNS)
 
 	fmt.Printf("config   %s\n", configPath())
+	patchWrangler(cfg)
 	fmt.Printf("\nnext:\n  wrangler deploy   (needs Workers Scripts + Workers Routes on the token)\n")
+}
+
+// Point the checked-in wrangler config at this account's namespace and domain, so
+// `wrangler deploy` works straight after a clone without hand-editing.
+func patchWrangler(cfg *Config) {
+	const name = "wrangler.jsonc"
+	raw, err := os.ReadFile(name)
+	if err != nil {
+		fmt.Printf("\nwrangler %s not in this directory — set these by hand before deploying:\n"+
+			"           kv_namespaces[0].id = %s\n"+
+			"           routes[0].pattern   = *.%s/*\n"+
+			"           routes[0].zone_name = %s\n"+
+			"           vars.BASE_DOMAIN    = %s\n",
+			name, cfg.NamespaceID, cfg.Domain, cfg.Domain, cfg.Domain)
+		return
+	}
+
+	out := string(raw)
+	for _, sub := range []struct{ re, repl string }{
+		{`"id":\s*"[^"]*"`, `"id": "` + cfg.NamespaceID + `"`},
+		{`"pattern":\s*"[^"]*"`, `"pattern": "*.` + cfg.Domain + `/*"`},
+		{`"zone_name":\s*"[^"]*"`, `"zone_name": "` + cfg.Domain + `"`},
+		{`"BASE_DOMAIN":\s*"[^"]*"`, `"BASE_DOMAIN": "` + cfg.Domain + `"`},
+	} {
+		out = regexp.MustCompile(sub.re).ReplaceAllString(out, sub.repl)
+	}
+
+	if out == string(raw) {
+		return
+	}
+	if err := os.WriteFile(name, []byte(out), 0o644); err != nil {
+		die("cannot write %s: %v", name, err)
+	}
+	fmt.Printf("wrangler %s updated\n", name)
 }
 
 // AAAA 100:: proxied is the documented placeholder for hostnames served only by a Worker.
@@ -536,7 +597,7 @@ func initDNS(cfg *Config, skip bool) {
 		"name":    "*",
 		"content": "100::",
 		"proxied": true,
-		"comment": "devdox — wildcard for worker route",
+		"comment": "sendup — wildcard for worker route",
 	})
 	if cf(cfg, http.MethodPost, fmt.Sprintf("/zones/%s/dns_records", cfg.ZoneID), body, true) == nil {
 		manual()
@@ -552,6 +613,8 @@ func cmdPublish(args []string) {
 	target, slug := "", ""
 	ttlDays := 0.0
 	wantAuth, noAuth, forceNew := false, false, false
+	wantLink, noLink, rotate := false, false, false
+	linkTTLDays := 0.0
 	authUser, authPass := "", ""
 
 	for i := 0; i < len(args); i++ {
@@ -575,6 +638,21 @@ func cmdPublish(args []string) {
 			}
 		case a == "--no-auth":
 			noAuth = true
+		case a == "--link":
+			wantLink = true
+		case a == "--no-link":
+			noLink = true
+		case a == "--rotate":
+			rotate = true
+		case a == "--link-ttl":
+			i++
+			if i < len(args) {
+				v, err := strconv.ParseFloat(args[i], 64)
+				if err != nil || v <= 0 {
+					die("--link-ttl wants a positive number of days")
+				}
+				linkTTLDays, wantLink = v, true
+			}
 		case a == "--new":
 			forceNew = true
 		case a == "--ttl":
@@ -595,7 +673,7 @@ func cmdPublish(args []string) {
 		}
 	}
 	if target == "" {
-		die("usage: devdox publish <file|dir> [--name NAME] [--ttl DAYS] [--auth [user:pass]] [--no-auth] [--new]")
+		die("usage: sendup publish <file|dir> [--name NAME] [--ttl DAYS] [--auth [user:pass]] [--no-auth] [--new]")
 	}
 	if wantAuth && noAuth {
 		die("--auth and --no-auth contradict each other")
@@ -651,12 +729,23 @@ func cmdPublish(args []string) {
 		ttl = max(int64(ttlDays*86400), 60) // 60s is the KV minimum
 	}
 
+	// link secret: keep the existing one so links already sent keep working, unless
+	// asked to rotate (which revokes every link issued so far)
+	linkSecret := ""
+	if !noLink {
+		if prev, ok := prevMeta["link"].(string); ok && !rotate {
+			linkSecret = prev
+		} else if wantLink || rotate {
+			linkSecret = newSecret()
+		}
+	}
+
 	var authMeta map[string]any
 	authCarried := false
 	switch {
 	case wantAuth:
 		if authUser == "" {
-			authUser, authPass = "devdox", newPassword()
+			authUser, authPass = "sendup", newPassword()
 		}
 		salt, hash := hashCreds(authUser, authPass)
 		authMeta = map[string]any{"salt": salt, "hash": hash}
@@ -684,9 +773,12 @@ func cmdPublish(args []string) {
 		total += int64(len(buf))
 		sum := sha256.Sum256(buf)
 		meta := map[string]any{"etag": `"` + hex.EncodeToString(sum[:])[:32] + `"`}
+		// on each object so a credentialed hit costs no extra KV read
 		if authMeta != nil {
-			// on each object so an authed hit costs no extra KV read
 			meta["auth"] = authMeta
+		}
+		if linkSecret != "" {
+			meta["link"] = linkSecret
 		}
 		pairs = append(pairs, kvPair{
 			Key:           slug + ":" + f.path,
@@ -707,8 +799,12 @@ func cmdPublish(args []string) {
 	if ttl > 0 {
 		meta["expires"] = time.Now().UTC().Add(time.Duration(ttl) * time.Second).Format(time.RFC3339)
 	}
+	// also on the site record, so the worker can gate 404s and paths can't be probed
 	if authMeta != nil {
-		meta["auth"] = authMeta // lets the worker gate 404s too, so paths can't be probed
+		meta["auth"] = authMeta
+	}
+	if linkSecret != "" {
+		meta["link"] = linkSecret
 	}
 	pairs = append(pairs, kvPair{Key: "__index:" + slug, Value: "", Metadata: meta, ExpirationTTL: ttl})
 
@@ -764,6 +860,26 @@ func cmdPublish(args []string) {
 	case noAuth && reused:
 		fmt.Fprintf(os.Stderr, "  basic auth  removed — the page is now open to anyone with the URL\n")
 	}
+
+	switch {
+	case linkSecret != "" && (wantLink || rotate):
+		var exp int64
+		if linkTTLDays > 0 {
+			exp = time.Now().Add(time.Duration(linkTTLDays * float64(24*time.Hour))).Unix()
+		}
+		if rotate {
+			fmt.Fprintf(os.Stderr, "  signed link rotated — every link issued before now is dead\n")
+		}
+		fmt.Fprintf(os.Stderr, "  share this:\n")
+		fmt.Printf("%s\n", linkURL(cfg, slug, mintToken(linkSecret, slug, exp)))
+		if exp > 0 {
+			fmt.Fprintf(os.Stderr, "  link expires %s\n", time.Unix(exp, 0).UTC().Format("2006-01-02 15:04 UTC"))
+		}
+	case linkSecret != "":
+		fmt.Fprintf(os.Stderr, "  signed link required — `sendup link %s` to issue one\n", slug)
+	case noLink && reused:
+		fmt.Fprintf(os.Stderr, "  signed link requirement removed\n")
+	}
 }
 
 func cmdList(args []string) {
@@ -805,9 +921,64 @@ func cmdList(args []string) {
 	}
 }
 
+func cmdLink(args []string) {
+	cfg := loadConfig()
+	cfg.require("apiToken", "accountId", "namespaceId", "domain")
+
+	slug := ""
+	ttlDays := 0.0
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--ttl":
+			i++
+			if i < len(args) {
+				v, err := strconv.ParseFloat(args[i], 64)
+				if err != nil || v <= 0 {
+					die("--ttl wants a positive number of days")
+				}
+				ttlDays = v
+			}
+		case strings.HasPrefix(a, "-"):
+			die("unknown flag %s", a)
+		case slug == "":
+			slug = a
+		default:
+			die("link takes one slug")
+		}
+	}
+	if slug == "" {
+		die("usage: sendup link <slug> [--ttl DAYS]")
+	}
+
+	var meta map[string]any
+	for _, k := range listKeys(cfg, "__index:"+slug) {
+		if k.Name == "__index:"+slug {
+			meta = k.Metadata
+		}
+	}
+	if meta == nil {
+		die("no site with slug %s", slug)
+	}
+	secret, ok := meta["link"].(string)
+	if !ok || secret == "" {
+		die("%s does not use signed links — republish it with --link first", slug)
+	}
+
+	var exp int64
+	if ttlDays > 0 {
+		exp = time.Now().Add(time.Duration(ttlDays * float64(24*time.Hour))).Unix()
+	}
+	fmt.Println(linkURL(cfg, slug, mintToken(secret, slug, exp)))
+	if exp > 0 {
+		fmt.Fprintf(os.Stderr, "  expires %s\n", time.Unix(exp, 0).UTC().Format("2006-01-02 15:04 UTC"))
+	} else {
+		fmt.Fprintf(os.Stderr, "  no expiry — `sendup publish ... --rotate` revokes every issued link\n")
+	}
+}
+
 func cmdRm(args []string) {
 	if len(args) != 1 {
-		die("usage: devdox rm <slug>")
+		die("usage: sendup rm <slug>")
 	}
 	cfg := loadConfig()
 	cfg.require("apiToken", "accountId", "namespaceId", "domain")
@@ -834,13 +1005,16 @@ func cmdRm(args []string) {
 }
 
 func usage() {
-	fmt.Println(`devdox — publish static pages to *.example.com
+	fmt.Println(`sendup — publish static pages to *.example.com
 
-  devdox publish <file|dir> [--name NAME] [--ttl DAYS] [--auth [user:pass]]
-                            [--no-auth] [--new]
-  devdox list
-  devdox rm <slug>
-  devdox init [--token TOKEN] [--domain example.com] [--skip-dns]
+  sendup publish <file|dir> [--name NAME] [--ttl DAYS]
+                            [--auth [user:pass]] [--no-auth]
+                            [--link] [--link-ttl DAYS] [--no-link] [--rotate]
+                            [--new]
+  sendup link <slug> [--ttl DAYS]
+  sendup list
+  sendup rm <slug>
+  sendup init [--token TOKEN] [--domain example.com] [--skip-dns]
 
 A single .html file becomes the site root. A directory is uploaded as-is;
 index.html at its root becomes "/".
@@ -853,10 +1027,16 @@ Publishing the same file or directory again reuses the subdomain it went to
 last time, so the URL you shared keeps working. Files removed since the last
 publish are swept. --new forces a fresh subdomain.
 
-Without --auth a page is readable by anyone holding the URL, and is sent with
-X-Robots-Tag: noindex. With --auth it is gated by HTTP Basic auth; bare --auth
-generates the credentials and prints them once. A republish keeps whatever auth
-the site already had unless --no-auth is passed.`)
+Three ways to control who gets in, and they compose:
+
+  (default)  the random subdomain IS the secret — anyone with the URL, no prompt
+  --link     only a signed link opens the page; no password to type. --link-ttl
+             sets an expiry, --rotate kills every link issued so far, and
+             "sendup link <slug>" mints more without re-uploading
+  --auth     HTTP Basic auth; bare --auth generates the credentials, prints once
+
+With both --link and --auth, either one gets you in. A republish keeps whatever
+the site already had; --no-auth and --no-link remove them.`)
 }
 
 func main() {
@@ -870,6 +1050,8 @@ func main() {
 		cmdPublish(args)
 	case "list", "ls":
 		cmdList(args)
+	case "link":
+		cmdLink(args)
 	case "rm", "delete":
 		cmdRm(args)
 	case "init":

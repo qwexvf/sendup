@@ -1,9 +1,9 @@
 ---
-name: devdox
-description: Publish a static HTML page or a directory of static files to a random subdomain of example.com and return the URL. Use when the user asks to publish, host, deploy, or share a page, report, dashboard, mockup, or write-up on their own domain — phrasings like "put this on devdox", "publish this page", "give me a link for this", "host this HTML". Not for dynamic apps: there is no server, no database, and no build step.
+name: sendup
+description: Publish a static HTML page or a directory of static files to a random subdomain of example.com and return the URL. Use when the user asks to publish, host, deploy, or share a page, report, dashboard, mockup, or write-up on their own domain — phrasings like "put this on sendup", "publish this page", "give me a link for this", "host this HTML". Not for dynamic apps: there is no server, no database, and no build step.
 ---
 
-# devdox
+# sendup
 
 Publishes static files to `https://<random>.example.com/`. One Cloudflare Worker reads
 the subdomain off the `Host` header and serves the matching files out of KV.
@@ -11,20 +11,35 @@ the subdomain off the `Host` header and serves the matching files out of KV.
 ## Publish
 
 ```bash
-devdox publish report.html            # single file -> becomes /
-devdox publish ./site                 # directory, index.html at its root -> /
-devdox publish page.html --ttl 7      # auto-deletes after 7 days
-devdox publish page.html --name demo  # https://demo.example.com/ instead of random
-devdox publish page.html --auth       # HTTP Basic auth, credentials generated
-devdox publish page.html --auth me:s3cret
+sendup publish report.html            # single file -> becomes /
+sendup publish ./site                 # directory, index.html at its root -> /
+sendup publish page.html --ttl 7      # auto-deletes after 7 days
+sendup publish page.html --name demo  # https://demo.example.com/ instead of random
+sendup publish page.html --link       # only a signed link opens it, no password
+sendup publish page.html --link-ttl 7 # signed link that expires in 7 days
+sendup publish page.html --auth       # HTTP Basic auth, credentials generated
+sendup publish page.html --auth me:s3cret
 ```
 
-The URL is printed on stdout; upload stats go to stderr. Report the URL to the user
-verbatim — don't reconstruct it.
+URLs are printed on stdout; everything else goes to stderr. Report URLs to the user
+verbatim — never reconstruct or shorten them, especially signed links, where the `?k=`
+token is the credential.
 
-With `--auth`, the generated password is printed **once** and only its salted hash is
-stored. Relay it to the user along with the URL, and tell them it can't be recovered —
-changing it means republishing.
+With `--auth`, the generated password prints **once** and only its salted hash is
+stored. Relay it alongside the URL and say it can't be recovered — changing it means
+republishing.
+
+## Choosing a gate
+
+- **nothing** — default. A 64-bit random subdomain, unlisted and `noindex`, but readable
+  by anyone who gets the URL. Right for scratch pages and drafts.
+- **`--link`** — best default when the user will *send* the page to someone. They click
+  and read; no password to relay. `sendup link <slug> [--ttl N]` issues more later
+  without re-uploading; `--rotate` on a publish revokes every link already issued.
+- **`--auth`** — strongest; survives the URL leaking. Costs the recipient a prompt.
+
+`--name` makes the URL guessable, so pair it with `--link` or `--auth` for anything
+that isn't meant to be public.
 
 ## Republishing
 
@@ -44,8 +59,8 @@ immediate.
 ## Manage
 
 ```bash
-devdox list        # every published site, newest first
-devdox rm <slug>   # delete a site and all its files
+sendup list        # every published site, newest first
+sendup rm <slug>   # delete a site and all its files
 ```
 
 ## Rules
@@ -69,7 +84,7 @@ devdox rm <slug>   # delete a site and all its files
 ## When something breaks
 
 - `no such site` — the slug was never published, or the TTL expired.
-- `missing "apiToken"` — run `devdox init --token <TOKEN>`; setup is documented in
-  `~/devdox/README.md`.
+- `missing "apiToken"` — run `sendup init --token <TOKEN>`; setup is documented in
+  `~/sendup/README.md`.
 - Page loads but assets 404 — relative paths in a directory publish resolve against the
   site root; check the paths match the directory layout that was uploaded.

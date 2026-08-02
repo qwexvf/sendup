@@ -1,17 +1,17 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "devdox",
+  "name": "sendup",
   "main": "src/worker.js",
   "compatibility_date": "2026-08-01",
 
-  // no devdox.workers.dev — the wildcard route is the only entrypoint
+  // no sendup.workers.dev — the wildcard route is the only entrypoint
   "workers_dev": false,
   "routes": [{ "pattern": "*.example.com/*", "zone_name": "example.com" }],
 
   "vars": { "BASE_DOMAIN": "example.com" },
 
-  // id is filled in by `devdox init`
-  "kv_namespaces": [{ "binding": "SITES", "id": "__KV_NAMESPACE_ID__" }],
+  // id is filled in by `sendup init`
+  "kv_namespaces": [{ "binding": "SITES", "id": "06779da6940b431db6e566b4846d64db" }],
 
   "observability": { "enabled": true }
 }
