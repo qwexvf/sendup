@@ -1171,6 +1171,174 @@ func kvValue(cfg *Config, base, key string) []byte {
 	return raw
 }
 
+// cmdDoctor compares local config against what Cloudflare actually has, and against the
+// generated wrangler.jsonc. Drift between the three is silent otherwise — a stale
+// namespace id points every command at an empty store while the real data sits elsewhere.
+func cmdDoctor(args []string) {
+	fix := false
+	for _, a := range args {
+		if a == "--fix" {
+			fix = true
+		} else {
+			die("unknown argument %s", a)
+		}
+	}
+
+	cfg := loadConfig()
+	problems := 0
+	report := func(state, label, detail string) {
+		if state == "FAIL" {
+			problems++
+		}
+		fmt.Printf("%-5s %-22s %s\n", state, label, detail)
+	}
+
+	if cfg.APIToken == "" || cfg.AccountID == "" || cfg.NamespaceID == "" || cfg.Domain == "" {
+		die("config is incomplete — run `sendup init --domain <your-domain> --token <TOKEN>`")
+	}
+	report("ok", "config", configPath())
+	report("ok", "domain", cfg.Domain)
+
+	// zone still ours, and still the id we recorded?
+	if resp := cf(cfg, http.MethodGet, "/zones?name="+url.QueryEscape(cfg.Domain), nil, true); resp == nil {
+		report("warn", "zone", "token cannot read zones — skipped (needs Zone > Zone > Read)")
+	} else {
+		var zones []struct {
+			ID      string `json:"id"`
+			Account struct {
+				ID string `json:"id"`
+			} `json:"account"`
+		}
+		if err := json.Unmarshal(resp.Result, &zones); err != nil {
+			die("unexpected zone listing: %v", err)
+		}
+		switch {
+		case len(zones) == 0:
+			report("FAIL", "zone", fmt.Sprintf("%s is not a zone on this account any more", cfg.Domain))
+		case zones[0].ID != cfg.ZoneID:
+			report("FAIL", "zone", fmt.Sprintf("id changed: config %s, Cloudflare %s", cfg.ZoneID, zones[0].ID))
+		case zones[0].Account.ID != cfg.AccountID:
+			report("FAIL", "account", fmt.Sprintf("id changed: config %s, Cloudflare %s", cfg.AccountID, zones[0].Account.ID))
+		default:
+			report("ok", "zone", cfg.ZoneID)
+		}
+	}
+
+	// namespace still exists under the recorded id?
+	resp := cf(cfg, http.MethodGet,
+		fmt.Sprintf("/accounts/%s/storage/kv/namespaces?per_page=100", cfg.AccountID), nil, true)
+	if resp == nil {
+		report("warn", "kv namespace", "token cannot list namespaces — skipped")
+	} else {
+		var namespaces []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		}
+		if err := json.Unmarshal(resp.Result, &namespaces); err != nil {
+			die("unexpected namespace listing: %v", err)
+		}
+		title := ""
+		for _, n := range namespaces {
+			if n.ID == cfg.NamespaceID {
+				title = n.Title
+			}
+		}
+		if title == "" {
+			others := make([]string, 0, len(namespaces))
+			for _, n := range namespaces {
+				others = append(others, n.Title+" "+n.ID)
+			}
+			report("FAIL", "kv namespace", fmt.Sprintf("%s does not exist. On the account: %s",
+				cfg.NamespaceID, strings.Join(others, ", ")))
+		} else {
+			report("ok", "kv namespace", title+" "+cfg.NamespaceID)
+		}
+	}
+
+	// wildcard DNS
+	name := "*." + cfg.Domain
+	if resp := cf(cfg, http.MethodGet,
+		fmt.Sprintf("/zones/%s/dns_records?name=%s", cfg.ZoneID, url.QueryEscape(name)), nil, true); resp == nil {
+		report("warn", "wildcard dns", "token cannot read DNS — skipped")
+	} else {
+		var records []struct {
+			Type    string `json:"type"`
+			Proxied bool   `json:"proxied"`
+		}
+		if err := json.Unmarshal(resp.Result, &records); err != nil {
+			die("unexpected dns listing: %v", err)
+		}
+		switch {
+		case len(records) == 0:
+			report("FAIL", "wildcard dns", name+" is missing — add AAAA * 100:: proxied")
+		case !records[0].Proxied:
+			report("FAIL", "wildcard dns", name+" exists but is DNS-only; it must be proxied")
+		default:
+			report("ok", "wildcard dns", name+" "+records[0].Type+" proxied")
+		}
+	}
+
+	// wrangler.jsonc agreeing with the config it was generated from
+	if raw, err := os.ReadFile("wrangler.jsonc"); err != nil {
+		report("warn", "wrangler.jsonc", "not in this directory — run doctor from the repo root")
+	} else {
+		text := string(raw)
+		var drift []string
+		if !strings.Contains(text, `"id": "`+cfg.NamespaceID+`"`) {
+			drift = append(drift, "kv namespace id")
+		}
+		if !strings.Contains(text, `"BASE_DOMAIN": "`+cfg.Domain+`"`) {
+			drift = append(drift, "BASE_DOMAIN")
+		}
+		if !strings.Contains(text, `"zone_name": "`+cfg.Domain+`"`) {
+			drift = append(drift, "route zone_name")
+		}
+		if len(drift) == 0 {
+			report("ok", "wrangler.jsonc", "matches config")
+		} else if fix {
+			patchWrangler(cfg)
+			report("ok", "wrangler.jsonc", "rewrote "+strings.Join(drift, ", "))
+		} else {
+			report("FAIL", "wrangler.jsonc", strings.Join(drift, ", ")+" disagree with config — `sendup doctor --fix`")
+		}
+	}
+
+	// dashboard set up?
+	admin := false
+	for _, k := range listKeys(cfg, "__admin") {
+		if k.Name == "__admin" {
+			admin = true
+		}
+	}
+	if admin {
+		report("ok", "dashboard", "https://dash."+cfg.Domain+"/")
+	} else {
+		report("warn", "dashboard", "not set up — `sendup admin` if you want it")
+	}
+
+	// is a worker actually answering on the wildcard?
+	probe := fmt.Sprintf("https://%s.%s/", newSlug(), cfg.Domain)
+	if res, err := httpClient.Get(probe); err != nil {
+		report("FAIL", "worker", "no response from "+probe+": "+err.Error())
+	} else {
+		defer res.Body.Close()
+		body, _ := io.ReadAll(res.Body)
+		if res.StatusCode == http.StatusNotFound && strings.Contains(string(body), "no such site") {
+			report("ok", "worker", "serving on *."+cfg.Domain)
+		} else {
+			report("FAIL", "worker",
+				fmt.Sprintf("%s answered %d, not the worker's 404 — deploy may be missing or the route unbound",
+					probe, res.StatusCode))
+		}
+	}
+
+	if problems > 0 {
+		fmt.Fprintf(os.Stderr, "\n%d problem%s\n", problems, plural(problems))
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stderr, "\nall good")
+}
+
 func cmdRm(args []string) {
 	if len(args) != 1 {
 		die("usage: sendup rm <slug>")
@@ -1210,6 +1378,7 @@ func usage() {
   sendup list
   sendup rm <slug>
   sendup rename <slug> <new-name>
+  sendup doctor [--fix]                          check local config against Cloudflare
   sendup admin [--user NAME] [--password PASS]   set up the dashboard
   sendup token <TOKEN>                           swap the stored API token
   sendup init --domain <your-domain> [--token TOKEN] [--skip-dns]
@@ -1266,6 +1435,8 @@ func main() {
 		cmdRm(args)
 	case "rename", "mv":
 		cmdRename(args)
+	case "doctor", "check":
+		cmdDoctor(args)
 	case "init":
 		cmdInit(args)
 	case "help", "-h", "--help":

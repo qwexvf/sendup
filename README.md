@@ -86,6 +86,7 @@ sendup publish page.html --ttl 30       # deletes itself after 30 days
 sendup list
 sendup rm <slug>
 sendup rename <slug> <new-name>         # move a site to a different subdomain
+sendup doctor [--fix]                   # check local config against Cloudflare
 sendup token <TOKEN>                    # swap the stored API token, no API call
 ```
 
@@ -110,6 +111,34 @@ pointed at the same account.
 > Workers KV caches reads for 60 seconds and that is also the floor, so it cannot be
 > tuned down. First-time publishes are immediate. This applies to access changes too —
 > adding a password to a live page leaves it briefly open.
+
+### Checking the setup
+
+`sendup doctor` compares your local config against what Cloudflare actually has, and
+against the generated `wrangler.jsonc`:
+
+```console
+$ sendup doctor
+ok    config                 /home/you/.config/sendup/config.json
+ok    domain                 example.com
+ok    zone                   023e105f4ecef8ad9ca31a8372d0c353
+ok    kv namespace           sendup-sites 06779da6940b431db6e566b4846d64db
+ok    wildcard dns           *.example.com AAAA proxied
+ok    wrangler.jsonc         matches config
+ok    dashboard              https://dash.example.com/
+ok    worker                 serving on *.example.com
+```
+
+It checks that the zone and account ids still match, that the KV namespace still exists
+under the recorded id, that the wildcard record is present *and proxied*, that
+`wrangler.jsonc` agrees with the config it was generated from, and that a Worker is
+really answering on the wildcard. Permissions it lacks are reported as `warn` and
+skipped, not treated as failures. Exits non-zero if anything is wrong; `--fix`
+regenerates `wrangler.jsonc`.
+
+Worth running after changing anything in the Cloudflare dashboard by hand. A stale
+namespace id is the nasty one — every command keeps working, quietly against an empty
+store, while the real data sits in a namespace nothing points at.
 
 ## Who can read it
 

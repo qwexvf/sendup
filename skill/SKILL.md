@@ -89,7 +89,9 @@ links and deleting sites. Point the user at it rather than trying to drive it yo
 ## When something breaks
 
 - `no such site` — the slug was never published, or the TTL expired.
-- `missing "apiToken"` — run `sendup init --token <TOKEN>`; setup is documented in
-  `~/sendup/README.md`.
+- `missing "apiToken"` — run `sendup init --domain <domain> --token <TOKEN>`; setup is
+  documented in `~/sendup/README.md`.
+- anything else odd about the setup — `sendup doctor` compares local config against
+  Cloudflare and says which part disagrees.
 - Page loads but assets 404 — relative paths in a directory publish resolve against the
   site root; check the paths match the directory layout that was uploaded.
