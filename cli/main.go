@@ -557,7 +557,7 @@ func cmdPublish(args []string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--slug":
+		case a == "--slug", a == "--name":
 			i++
 			if i < len(args) {
 				slug = args[i]
@@ -595,7 +595,7 @@ func cmdPublish(args []string) {
 		}
 	}
 	if target == "" {
-		die("usage: devdox publish <file|dir> [--slug NAME] [--ttl DAYS] [--auth [user:pass]] [--no-auth] [--new]")
+		die("usage: devdox publish <file|dir> [--name NAME] [--ttl DAYS] [--auth [user:pass]] [--no-auth] [--new]")
 	}
 	if wantAuth && noAuth {
 		die("--auth and --no-auth contradict each other")
@@ -609,7 +609,7 @@ func cmdPublish(args []string) {
 	if slug != "" {
 		slug = strings.ToLower(slug)
 		if !slugRe.MatchString(slug) {
-			die("--slug must be lowercase letters, digits and hyphens")
+			die("name must be lowercase letters, digits and hyphens, 2-63 chars — it becomes a hostname label")
 		}
 	}
 
@@ -836,7 +836,7 @@ func cmdRm(args []string) {
 func usage() {
 	fmt.Println(`devdox — publish static pages to *.example.com
 
-  devdox publish <file|dir> [--slug NAME] [--ttl DAYS] [--auth [user:pass]]
+  devdox publish <file|dir> [--name NAME] [--ttl DAYS] [--auth [user:pass]]
                             [--no-auth] [--new]
   devdox list
   devdox rm <slug>
@@ -845,9 +845,13 @@ func usage() {
 A single .html file becomes the site root. A directory is uploaded as-is;
 index.html at its root becomes "/".
 
+The subdomain defaults to 16 random hex chars. --name picks it by hand, e.g.
+--name camera-proposal serves https://camera-proposal.example.com/ (--slug is
+accepted as an alias).
+
 Publishing the same file or directory again reuses the subdomain it went to
 last time, so the URL you shared keeps working. Files removed since the last
-publish are swept. --new forces a fresh subdomain, --slug picks one by hand.
+publish are swept. --new forces a fresh subdomain.
 
 Without --auth a page is readable by anyone holding the URL, and is sent with
 X-Robots-Tag: noindex. With --auth it is gated by HTTP Basic auth; bare --auth

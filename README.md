@@ -60,7 +60,7 @@ records/zone free-plan cap never comes into play.
 ```bash
 devdox publish report.html             # -> https://a3f9c1d2e4b60718.example.com/
 devdox publish ./site --ttl 30         # directory, auto-deleted after 30 days
-devdox publish page.html --slug demo   # -> https://demo.example.com/
+devdox publish page.html --name demo   # -> https://demo.example.com/
 devdox publish page.html --auth        # basic auth, credentials generated
 devdox publish page.html --auth me:s3cret
 devdox list
@@ -81,7 +81,9 @@ state, so it survives from any machine pointed at the same account.
 - files deleted since the last publish are swept, so removed pages stop serving
 - existing Basic auth is carried over; `--no-auth` removes it
 - `--new` forces a fresh subdomain and repoints the source at it, orphaning the old site
-- `--slug NAME` overrides the lookup entirely
+- `--name NAME` overrides the lookup entirely and pins the subdomain
+  (`--slug` is accepted as an alias). Must be a valid hostname label: lowercase
+  letters, digits and hyphens, 2–63 chars.
 
 **A republish takes up to ~60 seconds to appear at an edge that already served the old
 version.** Workers KV caches reads for 60s and that is also the minimum, so it cannot be

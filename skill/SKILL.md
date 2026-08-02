@@ -14,7 +14,7 @@ the subdomain off the `Host` header and serves the matching files out of KV.
 devdox publish report.html            # single file -> becomes /
 devdox publish ./site                 # directory, index.html at its root -> /
 devdox publish page.html --ttl 7      # auto-deletes after 7 days
-devdox publish page.html --slug demo  # https://demo.example.com/ instead of random
+devdox publish page.html --name demo  # https://demo.example.com/ instead of random
 devdox publish page.html --auth       # HTTP Basic auth, credentials generated
 devdox publish page.html --auth me:s3cret
 ```
@@ -31,6 +31,10 @@ changing it means republishing.
 Publishing the same path again reuses the subdomain it went to last time — the shared
 URL keeps working, deleted files are swept, and existing auth is carried over. Use
 `--new` to force a fresh subdomain, `--no-auth` to remove a gate.
+
+A memorable `--name` is worth suggesting when the user will share or revisit the link;
+random slugs are the right default for one-off drafts. A name is guessable, so pair it
+with `--auth` for anything not meant for strangers.
 
 Updates take up to ~60s to appear at an edge that already served the old version (Workers
 KV read cache). Don't report a republish as live-and-verified straight after running it;
