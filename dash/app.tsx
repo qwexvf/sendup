@@ -10,6 +10,7 @@ import {
   Meter,
   Select,
   Table,
+  Text,
   useKumoToastManager,
 } from '@cloudflare/kumo'
 import {
@@ -154,13 +155,6 @@ const ACCESS_LABEL: Record<Access, string> = {
   both: 'link or password',
 }
 
-const ACCESS_VARIANT: Record<Access, 'orange' | 'teal' | 'green' | 'blue'> = {
-  open: 'orange',
-  link: 'teal',
-  auth: 'green',
-  both: 'blue',
-}
-
 function DeleteDialog({ site, onDeleted }: { site: Site; onDeleted: () => void }) {
   const toast = useKumoToastManager()
   const [open, setOpen] = useState(false)
@@ -188,7 +182,6 @@ function DeleteDialog({ site, onDeleted }: { site: Site; onDeleted: () => void }
         render={(p) => (
           <Button
             {...p}
-            size="base"
             variant="secondary-destructive"
             shape="square"
             title="Delete site"
@@ -199,8 +192,8 @@ function DeleteDialog({ site, onDeleted }: { site: Site; onDeleted: () => void }
         )}
       />
       <Dialog size="base" className="p-6">
-        <Dialog.Title className="text-lg font-semibold">Delete {site.slug}?</Dialog.Title>
-        <Dialog.Description className="mt-2 text-kumo-subtle">
+        <Dialog.Title render={<Text as="h2" variant="heading3" />}>Delete {site.slug}?</Dialog.Title>
+        <Dialog.Description render={<Text variant="secondary" />} className="mt-1.5">
           Removes {site.files} file{site.files === 1 ? '' : 's'} and the URL stops working. This
           cannot be undone.
         </Dialog.Description>
@@ -266,7 +259,6 @@ function RenameDialog({ site, onRenamed }: { site: Site; onRenamed: (to: string)
         render={(p) => (
           <Button
             {...p}
-            size="base"
             shape="square"
             title="Change subdomain"
             aria-label={`Change subdomain for ${site.slug}`}
@@ -276,8 +268,8 @@ function RenameDialog({ site, onRenamed }: { site: Site; onRenamed: (to: string)
         )}
       />
       <Dialog size="lg" className="p-6">
-        <Dialog.Title className="text-lg font-semibold">Change subdomain</Dialog.Title>
-        <Dialog.Description className="mt-2 text-kumo-subtle">
+        <Dialog.Title render={<Text as="h2" variant="heading3" />}>Change subdomain</Dialog.Title>
+        <Dialog.Description render={<Text variant="secondary" />} className="mt-1.5">
           Moves {site.files} file{site.files === 1 ? '' : 's'}. The current URL stops working
           immediately{site.access === 'link' || site.access === 'both'
             ? ', and every signed link already issued for this site dies with it'
@@ -388,35 +380,51 @@ function Row({
             rel="noopener noreferrer"
             className="font-medium break-all hover:underline"
           >
-            {site.slug}
+            <Text>{site.slug}</Text>
           </a>
-          {site.title && <span className="text-sm text-kumo-subtle break-all">{site.title}</span>}
+          {site.title && (
+            <Text variant="secondary" size="sm" className="break-all">
+              {site.title}
+            </Text>
+          )}
           {syncing && (
-            <span className="flex items-center gap-1 text-xs text-kumo-subtle">
-              <Loader size="sm" /> renamed — edge still catching up
+            <span className="flex items-center gap-1.5">
+              <span className="h-lh flex items-center">
+                <Loader size="sm" />
+              </span>
+              <Text variant="secondary" size="xs">
+                renamed — edge still catching up
+              </Text>
             </span>
           )}
         </div>
       </Table.Cell>
 
       <Table.Cell>
-        <Badge variant={ACCESS_VARIANT[site.access]}>{ACCESS_LABEL[site.access]}</Badge>
+        <Badge>{ACCESS_LABEL[site.access]}</Badge>
       </Table.Cell>
 
-      <Table.Cell className="whitespace-nowrap tabular-nums text-kumo-subtle">
-        {site.files} · {formatBytes(site.bytes)}
+      <Table.Cell className="whitespace-nowrap">
+        <Text variant="secondary">
+          {site.files} · {formatBytes(site.bytes)}
+        </Text>
       </Table.Cell>
 
-      <Table.Cell className="whitespace-nowrap tabular-nums text-kumo-subtle">
-        {site.created ? site.created.slice(0, 10) : '—'}
-        {site.expires && <div className="text-xs">expires {site.expires.slice(0, 10)}</div>}
+      <Table.Cell className="whitespace-nowrap">
+        <Text variant="secondary">
+          {site.created ? site.created.slice(0, 10) : '—'}
+        </Text>
+        {site.expires && (
+          <Text variant="secondary" size="xs">
+            expires {site.expires.slice(0, 10)}
+          </Text>
+        )}
       </Table.Cell>
 
-      <Table.Cell sticky="right">
+      <Table.Cell>
         <div className="flex items-center justify-end gap-2">
           <Select
             aria-label={`Access for ${site.slug}`}
-            size="base"
             className="w-[11.5rem]"
             value={site.access === 'both' ? 'auth' : site.access}
             disabled={busy}
@@ -426,8 +434,7 @@ function Row({
           {linkable && (
             <>
               <Button
-                size="base"
-                shape="square"
+                    shape="square"
                 title="Copy share link"
                 aria-label={`Copy share link for ${site.slug}`}
                 disabled={busy}
@@ -435,12 +442,11 @@ function Row({
               >
                 <LinkIcon />
               </Button>
-              <Button size="base" aria-label={`Copy 7-day link for ${site.slug}`} disabled={busy} onClick={() => copyLink(7)}>
+              <Button aria-label={`Copy 7-day link for ${site.slug}`} disabled={busy} onClick={() => copyLink(7)}>
                 7d
               </Button>
               <Button
-                size="base"
-                shape="square"
+                    shape="square"
                 title="Revoke every issued link"
                 aria-label={`Revoke every link for ${site.slug}`}
                 disabled={busy}
@@ -510,16 +516,19 @@ export function App() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-kumo pb-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">sendup</h1>
-          <p className="text-sm text-kumo-subtle">
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-x-8 gap-y-4 border-b border-kumo pb-5">
+        {/* title and its subtitle belong together, so they sit tighter than the row gap */}
+        <div className="grid gap-1">
+          <Text as="h1" variant="heading3">
+            sendup
+          </Text>
+          <Text variant="secondary">
             {totals.sites} site{totals.sites === 1 ? '' : 's'} · {totals.files} files on {BASE}
-          </p>
-
+          </Text>
         </div>
-        <div className="flex w-full items-end gap-3 sm:w-auto">
-          <div className="w-full sm:w-64">
+
+        <div className="flex items-center gap-3">
+          <div className="w-56">
             <Meter
               label="Storage"
               value={totals.bytes}
@@ -528,7 +537,6 @@ export function App() {
             />
           </div>
           <Button
-            size="base"
             shape="square"
             aria-label="Reload from the server"
             title="Reload"
@@ -537,7 +545,6 @@ export function App() {
             <ArrowsClockwiseIcon />
           </Button>
           <Button
-            size="base"
             shape="square"
             aria-label={mode === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
             title={mode === 'dark' ? 'Light theme' : 'Dark theme'}
@@ -589,7 +596,7 @@ export function App() {
               <Table.Head>Access</Table.Head>
               <Table.Head>Size</Table.Head>
               <Table.Head>Published</Table.Head>
-              <Table.Head sticky="right" className="text-right">
+              <Table.Head className="text-right">
                 Actions
               </Table.Head>
             </Table.Row>

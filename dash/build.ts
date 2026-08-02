@@ -30,27 +30,11 @@ try {
 } catch (e) { document.documentElement.dataset.mode = 'dark' }
 `
 
-// Kumo ships a system stack; these are the same idea with sharper faces preferred when
-// they happen to be installed. Nothing is fetched — a strict CSP blocks external fonts.
+// Kumo owns typography and colour. The only thing added here is telling the browser
+// which scheme is active so native controls and scrollbars match.
 const typography = `
-:root{
-  --font-sans: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system,
-               "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", SFMono-Regular, "Fira Code",
-               Menlo, Consolas, "Liberation Mono", monospace;
-}
 html{ color-scheme: dark }
 html[data-mode="light"]{ color-scheme: light }
-body{
-  font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  font-feature-settings: "cv02","cv03","cv04","cv11";
-}
-h1,h2,h3{ letter-spacing: -0.011em }
-code,pre,kbd,samp,.tabular-nums{ font-family: var(--font-mono) }
-/* sizes and dates line up in the table */
-table td,table th{ font-variant-numeric: tabular-nums }
 `
 
 const html = `<!doctype html>
