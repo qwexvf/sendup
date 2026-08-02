@@ -49,13 +49,15 @@ function need(cfg, ...keys) {
 
 // ---------- cloudflare api ----------
 
+// returns null instead of exiting when init.tolerate403 is set and the token lacks the permission
 async function cf(cfg, path, init = {}) {
+  const { tolerate403, ...fetchInit } = init
   const res = await fetch(API + path, {
-    ...init,
+    ...fetchInit,
     headers: {
       authorization: `Bearer ${cfg.apiToken}`,
-      ...(init.body && !init.headers ? { 'content-type': 'application/json' } : {}),
-      ...init.headers,
+      ...(fetchInit.body && !fetchInit.headers ? { 'content-type': 'application/json' } : {}),
+      ...fetchInit.headers,
     },
   })
   const text = await res.text()
@@ -67,6 +69,7 @@ async function cf(cfg, path, init = {}) {
   }
   if (!body.success) {
     const errs = (body.errors || []).map((e) => `${e.code} ${e.message}`).join('; ')
+    if (tolerate403 && (res.status === 403 || (body.errors || []).some((e) => e.code === 10000))) return null
     let hint = ''
     if ((body.errors || []).some((e) => e.code === 10000)) {
       hint = `\n  the token is missing a permission for this call — it needs ${permissionFor(path)}.` +
@@ -210,21 +213,40 @@ async function cmdInit(argv) {
   saveConfig(cfg)
 
   // wildcard record. AAAA 100:: proxied is the documented placeholder for worker-only hostnames
-  const recs = await cf(cfg, `/zones/${cfg.zoneId}/dns_records?name=${encodeURIComponent('*.' + cfg.domain)}`)
-  if (recs.result.length) {
-    console.log(`dns      *.${cfg.domain} ${recs.result[0].type} (existing)`)
+  const manualDns = () =>
+    console.log(
+      `\ndns      NOT set up — create it by hand at\n` +
+        `         https://dash.cloudflare.com/?to=/:account/${cfg.domain}/dns\n` +
+        `         Type AAAA   Name *   IPv6 100::   Proxy status: Proxied\n` +
+        `         (needs Zone > DNS > Edit on the token to automate; account-owned\n` +
+        `          tokens cannot carry zone permissions at all)`
+    )
+
+  if (argv.includes('--skip-dns')) {
+    manualDns()
   } else {
-    await cf(cfg, `/zones/${cfg.zoneId}/dns_records`, {
-      method: 'POST',
-      body: JSON.stringify({
-        type: 'AAAA',
-        name: '*',
-        content: '100::',
-        proxied: true,
-        comment: 'devdox — wildcard for worker route',
-      }),
+    const recs = await cf(cfg, `/zones/${cfg.zoneId}/dns_records?name=${encodeURIComponent('*.' + cfg.domain)}`, {
+      tolerate403: true,
     })
-    console.log(`dns      *.${cfg.domain} AAAA 100:: proxied (created)`)
+    if (recs === null) {
+      manualDns()
+    } else if (recs.result.length) {
+      console.log(`dns      *.${cfg.domain} ${recs.result[0].type} (existing)`)
+    } else {
+      const made = await cf(cfg, `/zones/${cfg.zoneId}/dns_records`, {
+        method: 'POST',
+        tolerate403: true,
+        body: JSON.stringify({
+          type: 'AAAA',
+          name: '*',
+          content: '100::',
+          proxied: true,
+          comment: 'devdox — wildcard for worker route',
+        }),
+      })
+      if (made === null) manualDns()
+      else console.log(`dns      *.${cfg.domain} AAAA 100:: proxied (created)`)
+    }
   }
 
   saveConfig(cfg)
@@ -351,7 +373,7 @@ function usage() {
   devdox publish <file|dir> [--slug NAME] [--ttl DAYS]
   devdox list
   devdox rm <slug>
-  devdox init [--token TOKEN] [--domain example.com]
+  devdox init [--token TOKEN] [--domain example.com] [--skip-dns]
 
 A single .html file becomes the site root. A directory is uploaded as-is;
 index.html at its root becomes "/". Slugs are 16 random hex chars unless
