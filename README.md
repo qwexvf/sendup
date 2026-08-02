@@ -21,32 +21,38 @@ records/zone free-plan cap never comes into play.
 
    | Scope   | Permission          | Level |
    | ------- | ------------------- | ----- |
-   | Account | Workers KV Storage  | Edit  |
-   | Account | Workers Scripts     | Edit  |
-   | Zone    | DNS                 | Edit  |
-   | Zone    | Zone                | Read  |
+   | Scope   | Permission          | Level | Needed for                          |
+   | ------- | ------------------- | ----- | ----------------------------------- |
+   | Account | Workers KV Storage  | Edit  | `init`, `publish`, `rm`             |
+   | Account | Workers Scripts     | Edit  | `wrangler deploy`                   |
+   | Zone    | Workers Routes      | Edit  | `wrangler deploy` — binds the route |
+   | Zone    | Zone                | Read  | `init` (zone + account lookup)      |
+   | Zone    | DNS                 | Edit  | wildcard record — optional          |
 
-   Restrict it to the `example.com` zone and your account.
+   Restrict it to the `example.com` zone and your account. It must be a **user-owned**
+   token (`profile/api-tokens`) — account-owned tokens cannot hold zone permissions.
 
-2. Provision the KV namespace and the wildcard DNS record:
+2. Build the CLI and put it on `PATH`:
 
    ```bash
-   ./bin/devdox init --token <TOKEN>
+   (cd cli && go build -o devdox .)
+   ln -s "$PWD/cli/devdox" ~/.claude/bin/devdox
    ```
 
-   This writes `~/.config/devdox/config.json` (mode 0600) and fills the namespace id
-   into `wrangler.jsonc`.
+3. Provision the KV namespace and the wildcard DNS record:
 
-3. Deploy the worker:
+   ```bash
+   devdox init --token <TOKEN>
+   ```
+
+   Writes `~/.config/devdox/config.json` (mode 0600) and fills the namespace id into
+   `wrangler.jsonc`. If the token has no `Zone > DNS > Edit`, it prints the record to
+   create by hand and carries on — `--skip-dns` does the same without trying.
+
+4. Deploy the worker:
 
    ```bash
    CLOUDFLARE_API_TOKEN=<TOKEN> npx wrangler deploy
-   ```
-
-4. Put the CLI on `PATH`:
-
-   ```bash
-   ln -s "$PWD/bin/devdox" ~/.claude/bin/devdox
    ```
 
 ## Use
