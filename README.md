@@ -61,6 +61,8 @@ records/zone free-plan cap never comes into play.
 devdox publish report.html             # -> https://a3f9c1d2e4b60718.example.com/
 devdox publish ./site --ttl 30         # directory, auto-deleted after 30 days
 devdox publish page.html --slug demo   # -> https://demo.example.com/
+devdox publish page.html --auth        # basic auth, credentials generated
+devdox publish page.html --auth me:s3cret
 devdox list
 devdox rm a3f9c1d2e4b60718
 ```
@@ -95,6 +97,22 @@ roughly a thousand files a day.
 
 ## Security
 
-Pages are public to anyone holding the URL. The slug is 64 bits of randomness and
-responses carry `X-Robots-Tag: noindex, nofollow, noarchive`, so pages are unlisted
-rather than secret. Do not publish anything that needs authentication.
+By default a page is readable by anyone holding the URL. The slug is 64 bits of
+randomness and responses carry `X-Robots-Tag: noindex, nofollow, noarchive`, so pages
+are **unlisted rather than secret**.
+
+`--auth` adds HTTP Basic auth. The CLI generates a 16-byte salt and stores only
+`sha256(salt + "user:pass")` in KV metadata — the password itself is printed once at
+publish time and never persisted, so changing it means republishing. The worker
+recomputes the hash from the `Authorization` header and compares it with a constant-time
+loop.
+
+The hash rides on every object's metadata, so an authenticated hit costs no extra KV
+read. It's also on the site's `__index:` record, which the worker consults on a miss —
+without that, an unauthenticated caller could probe which paths exist by watching 404
+versus 401. Authenticated responses are sent `Cache-Control: private, no-store` and
+`Vary: Authorization`.
+
+Basic auth sends credentials base64-encoded on every request, so it relies entirely on
+TLS. Cloudflare terminates HTTPS here, which means Cloudflare can see the plaintext.
+It's a reasonable gate for "don't show this to strangers"; it is not a secrets store.

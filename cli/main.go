@@ -214,6 +214,26 @@ func newSlug() string {
 	return hex.EncodeToString(b[:])
 }
 
+func newPassword() string {
+	var b [12]byte // 96 bits
+	if _, err := rand.Read(b[:]); err != nil {
+		die("cannot generate password: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b[:])
+}
+
+// hashCreds returns a random salt and sha256(salt + "user:pass"), both hex.
+// The worker recomputes this from the Basic auth header and compares in constant time.
+func hashCreds(user, pass string) (salt, hash string) {
+	var s [16]byte
+	if _, err := rand.Read(s[:]); err != nil {
+		die("cannot generate salt: %v", err)
+	}
+	salt = hex.EncodeToString(s[:])
+	sum := sha256.Sum256([]byte(salt + user + ":" + pass))
+	return salt, hex.EncodeToString(sum[:])
+}
+
 type upload struct {
 	path string // site-absolute, e.g. /index.html
 	abs  string
@@ -531,6 +551,9 @@ func cmdPublish(args []string) {
 
 	target, slug := "", ""
 	ttlDays := 0.0
+	wantAuth := false
+	authUser, authPass := "", ""
+
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -538,6 +561,17 @@ func cmdPublish(args []string) {
 			i++
 			if i < len(args) {
 				slug = args[i]
+			}
+		case a == "--auth":
+			wantAuth = true
+			// optional "user:pass"; bare --auth generates both
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				u, p, ok := strings.Cut(args[i], ":")
+				if !ok || u == "" || p == "" {
+					die("--auth wants user:pass (or bare --auth to generate credentials)")
+				}
+				authUser, authPass = u, p
 			}
 		case a == "--ttl":
 			i++
@@ -557,7 +591,7 @@ func cmdPublish(args []string) {
 		}
 	}
 	if target == "" {
-		die("usage: devdox publish <file|dir> [--slug NAME] [--ttl DAYS]")
+		die("usage: devdox publish <file|dir> [--slug NAME] [--ttl DAYS] [--auth [user:pass]]")
 	}
 
 	if slug != "" {
@@ -574,6 +608,15 @@ func cmdPublish(args []string) {
 		ttl = max(int64(ttlDays*86400), 60) // 60s is the KV minimum
 	}
 
+	var authMeta map[string]any
+	if wantAuth {
+		if authUser == "" {
+			authUser, authPass = "devdox", newPassword()
+		}
+		salt, hash := hashCreds(authUser, authPass)
+		authMeta = map[string]any{"salt": salt, "hash": hash}
+	}
+
 	files := collectFiles(target)
 	pairs := make([]kvPair, 0, len(files)+1)
 	var total int64
@@ -588,11 +631,16 @@ func cmdPublish(args []string) {
 		}
 		total += int64(len(buf))
 		sum := sha256.Sum256(buf)
+		meta := map[string]any{"etag": `"` + hex.EncodeToString(sum[:])[:32] + `"`}
+		if authMeta != nil {
+			// on each object so an authed hit costs no extra KV read
+			meta["auth"] = authMeta
+		}
 		pairs = append(pairs, kvPair{
 			Key:           slug + ":" + f.path,
 			Value:         base64.StdEncoding.EncodeToString(buf),
 			Base64:        true,
-			Metadata:      map[string]any{"etag": `"` + hex.EncodeToString(sum[:])[:32] + `"`},
+			Metadata:      meta,
 			ExpirationTTL: ttl,
 		})
 	}
@@ -606,6 +654,9 @@ func cmdPublish(args []string) {
 	}
 	if ttl > 0 {
 		meta["expires"] = time.Now().UTC().Add(time.Duration(ttl) * time.Second).Format(time.RFC3339)
+	}
+	if authMeta != nil {
+		meta["auth"] = authMeta // lets the worker gate 404s too, so paths can't be probed
 	}
 	pairs = append(pairs, kvPair{Key: "__index:" + slug, Value: "", Metadata: meta, ExpirationTTL: ttl})
 
@@ -621,6 +672,11 @@ func cmdPublish(args []string) {
 		extra = fmt.Sprintf(", expires in %g days", ttlDays)
 	}
 	fmt.Fprintf(os.Stderr, "  %d file%s, %s%s\n", len(files), plural, fmtBytes(total), extra)
+	if authMeta != nil {
+		// only the salted hash reaches KV — this is the one time the password is shown
+		fmt.Fprintf(os.Stderr, "  basic auth  %s / %s\n", authUser, authPass)
+		fmt.Fprintf(os.Stderr, "  not recoverable later — republish to change it\n")
+	}
 }
 
 func cmdList(args []string) {
@@ -693,15 +749,18 @@ func cmdRm(args []string) {
 func usage() {
 	fmt.Println(`devdox — publish static pages to *.example.com
 
-  devdox publish <file|dir> [--slug NAME] [--ttl DAYS]
+  devdox publish <file|dir> [--slug NAME] [--ttl DAYS] [--auth [user:pass]]
   devdox list
   devdox rm <slug>
   devdox init [--token TOKEN] [--domain example.com] [--skip-dns]
 
 A single .html file becomes the site root. A directory is uploaded as-is;
 index.html at its root becomes "/". Slugs are 16 random hex chars unless
---slug is given. Pages are public to anyone with the URL and sent with
-X-Robots-Tag: noindex.`)
+--slug is given.
+
+Without --auth a page is readable by anyone holding the URL, and is sent with
+X-Robots-Tag: noindex. With --auth it is gated by HTTP Basic auth; bare --auth
+generates the credentials and prints them once.`)
 }
 
 func main() {
