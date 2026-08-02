@@ -1,7 +1,7 @@
 // Renders the real App against a stubbed API in a DOM, so a broken import or a misused
 // Kumo prop fails here rather than in the browser.
 
-import { afterEach, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, expect, mock, test } from 'bun:test'
 import { act } from 'react'
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -41,6 +41,9 @@ function type(input: HTMLInputElement, value: string) {
 
 let root: Root | null = null
 let host: HTMLElement | null = null
+
+// the app parks in-flight changes here; leaking them would skew the next test
+beforeEach(() => sessionStorage.clear())
 
 afterEach(() => {
   act(() => root?.unmount())

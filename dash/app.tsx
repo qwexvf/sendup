@@ -55,6 +55,71 @@ function formatBytes(n: number) {
   return `${(n / 1024 ** 2).toFixed(1)} MB`
 }
 
+// Cloudflare KV list is eventually consistent, so for up to a minute after a change the
+// server still reports the old world — including across a page reload, which throws away
+// any in-memory correction. Park the change in sessionStorage and replay it over each
+// response until the server catches up.
+type Pending =
+  | { type: 'delete'; slug: string; at: number }
+  | { type: 'rename'; slug: string; to: string; at: number }
+
+const PENDING_KEY = 'sendup:pending'
+const PENDING_TTL = 150_000
+
+function readPending(): Pending[] {
+  try {
+    const raw = sessionStorage.getItem(PENDING_KEY)
+    if (!raw) return []
+    const now = Date.now()
+    return (JSON.parse(raw) as Pending[]).filter((p) => now - p.at < PENDING_TTL)
+  } catch {
+    return []
+  }
+}
+
+function writePending(list: Pending[]) {
+  try {
+    if (list.length) sessionStorage.setItem(PENDING_KEY, JSON.stringify(list))
+    else sessionStorage.removeItem(PENDING_KEY)
+  } catch {
+    /* private mode, quota — the in-memory update still applies */
+  }
+}
+
+const addPending = (p: Pending) => writePending([...readPending(), p])
+
+// Replays outstanding changes over a server response and forgets the ones it has caught
+// up on. Returns the corrected list plus how many are still outstanding.
+export function reconcile(sites: Site[]): { sites: Site[]; waiting: number } {
+  const keep: Pending[] = []
+  let out = sites
+
+  for (const p of readPending()) {
+    const hasOld = out.some((s) => s.slug === p.slug)
+    if (p.type === 'delete') {
+      if (!hasOld) continue // server agrees it is gone
+      out = out.filter((s) => s.slug !== p.slug)
+    } else {
+      const hasNew = out.some((s) => s.slug === p.to)
+      if (!hasOld && hasNew) continue // server agrees on the new name
+      // mid-propagation the list can carry both; drop the stale one either way
+      out = hasNew
+        ? out.filter((s) => s.slug !== p.slug)
+        : out.map((s) => (s.slug === p.slug ? { ...s, slug: p.to } : s))
+    }
+    keep.push(p)
+  }
+
+  writePending(keep)
+  return { sites: out, waiting: keep.length }
+}
+
+const totalsOf = (sites: Site[]): Totals => ({
+  sites: sites.length,
+  files: sites.reduce((a, s) => a + s.files, 0),
+  bytes: sites.reduce((a, s) => a + s.bytes, 0),
+})
+
 const ACCESS_LABEL: Record<Access, string> = {
   open: 'anyone with the URL',
   link: 'signed link',
@@ -361,14 +426,16 @@ function Row({
 
 export function App() {
   const [sites, setSites] = useState<Site[] | null>(null)
-  const [totals, setTotals] = useState<Totals>({ sites: 0, files: 0, bytes: 0 })
+  const [waiting, setWaiting] = useState(0)
   const [error, setError] = useState('')
+  const totals = totalsOf(sites ?? [])
 
   const load = useCallback(async () => {
     try {
-      const d = await api<{ sites: Site[]; totals: Totals }>('list')
-      setSites(d.sites)
-      setTotals(d.totals)
+      const d = await api<{ sites: Site[] }>('list')
+      const fixed = reconcile(d.sites)
+      setSites(fixed.sites)
+      setWaiting(fixed.waiting)
       setError('')
     } catch (e) {
       setError((e as Error).message)
@@ -379,30 +446,28 @@ export function App() {
     void load()
   }, [load])
 
-  // Cloudflare KV list is eventually consistent, so refetching straight after a mutation
-  // routinely returns the state we just changed. Apply the change locally instead; the
-  // Refresh button is there for when you actually want the server's view.
+  // Keep polling while a change is still propagating, so the banner clears itself.
+  useEffect(() => {
+    if (!waiting) return
+    const t = setTimeout(() => void load(), 15_000)
+    return () => clearTimeout(t)
+  }, [waiting, load])
+
   const dropSite = useCallback((slug: string) => {
-    setSites((prev) => {
-      if (!prev) return prev
-      const gone = prev.find((s) => s.slug === slug)
-      if (gone) {
-        setTotals((t) => ({
-          sites: t.sites - 1,
-          files: t.files - gone.files,
-          bytes: t.bytes - gone.bytes,
-        }))
-      }
-      return prev.filter((s) => s.slug !== slug)
-    })
+    addPending({ type: 'delete', slug, at: Date.now() })
+    setSites((prev) => prev && prev.filter((s) => s.slug !== slug))
+    setWaiting((n) => n + 1)
   }, [])
 
   const setAccess = useCallback((slug: string, access: Access) => {
+    // access lives on a single key, which is read-your-write consistent — no replay needed
     setSites((prev) => prev && prev.map((s) => (s.slug === slug ? { ...s, access } : s)))
   }, [])
 
   const renameSite = useCallback((slug: string, to: string) => {
+    addPending({ type: 'rename', slug, to, at: Date.now() })
     setSites((prev) => prev && prev.map((s) => (s.slug === slug ? { ...s, slug: to } : s)))
+    setWaiting((n) => n + 1)
   }, [])
 
   return (
@@ -413,6 +478,12 @@ export function App() {
           <p className="text-sm text-kumo-subtle">
             {totals.sites} site{totals.sites === 1 ? '' : 's'} · {totals.files} files on {BASE}
           </p>
+          {waiting > 0 && (
+            <p className="mt-1 text-xs text-kumo-subtle">
+              {waiting} recent change{waiting === 1 ? '' : 's'} still propagating — Cloudflare
+              KV takes up to a minute to agree. Shown here already.
+            </p>
+          )}
         </div>
         <div className="flex w-full items-end gap-3 sm:w-auto">
           <div className="w-full sm:w-64">
