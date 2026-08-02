@@ -197,6 +197,42 @@ test('renaming posts the new subdomain and relabels the row', async () => {
   )
 })
 
+test('shows a propagation indicator while a rename is still settling', async () => {
+  // a rename the server has not caught up on yet
+  sessionStorage.setItem(
+    'sendup:pending',
+    JSON.stringify([{ type: 'rename', slug: 'a3f9c1d2e4b60718', to: 'quarterly', at: Date.now() }])
+  )
+
+  const { text } = await render({
+    sites: SITES,
+    totals: { sites: 2, files: 5, bytes: 1085780 },
+  })
+
+  // the corrected name survives the reload, and the delay is explained
+  expect(text()).toContain('quarterly')
+  expect(text()).not.toContain('a3f9c1d2e4b60718')
+  expect(text()).toContain('1 change still reaching the edge')
+  expect(text()).toContain('edge still catching up')
+})
+
+test('drops the indicator once the server agrees', async () => {
+  sessionStorage.setItem(
+    'sendup:pending',
+    JSON.stringify([{ type: 'rename', slug: 'a3f9c1d2e4b60718', to: 'quarterly', at: Date.now() }])
+  )
+
+  const { text } = await render({
+    sites: [{ ...SITES[0], slug: 'quarterly' }, SITES[1]],
+    totals: { sites: 2, files: 5, bytes: 1085780 },
+  })
+
+  expect(text()).toContain('quarterly')
+  expect(text()).not.toContain('still reaching the edge')
+  expect(text()).not.toContain('edge still catching up')
+  expect(sessionStorage.getItem('sendup:pending')).toBeNull()
+})
+
 test('each row exposes a labelled access control', async () => {
   const { calls, text } = await render({
     sites: SITES,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   Badge,
+  Banner,
   Button,
   Dialog,
   Empty,
@@ -90,8 +91,9 @@ const addPending = (p: Pending) => writePending([...readPending(), p])
 
 // Replays outstanding changes over a server response and forgets the ones it has caught
 // up on. Returns the corrected list plus how many are still outstanding.
-export function reconcile(sites: Site[]): { sites: Site[]; waiting: number } {
+export function reconcile(sites: Site[]): { sites: Site[]; waiting: number; syncing: string[] } {
   const keep: Pending[] = []
+  const syncing: string[] = []
   let out = sites
 
   for (const p of readPending()) {
@@ -108,10 +110,12 @@ export function reconcile(sites: Site[]): { sites: Site[]; waiting: number } {
         : out.map((s) => (s.slug === p.slug ? { ...s, slug: p.to } : s))
     }
     keep.push(p)
+    // a deleted row is not on screen, so only renames get a per-row marker
+    if (p.type === 'rename') syncing.push(p.to)
   }
 
   writePending(keep)
-  return { sites: out, waiting: keep.length }
+  return { sites: out, waiting: keep.length, syncing }
 }
 
 const totalsOf = (sites: Site[]): Totals => ({
@@ -291,11 +295,13 @@ function RenameDialog({ site, onRenamed }: { site: Site; onRenamed: (to: string)
 
 function Row({
   site,
+  syncing,
   onDeleted,
   onAccess,
   onRenamed,
 }: {
   site: Site
+  syncing: boolean
   onDeleted: () => void
   onAccess: (access: Access) => void
   onRenamed: (to: string) => void
@@ -362,6 +368,11 @@ function Row({
             {site.slug}
           </a>
           {site.title && <span className="text-sm text-kumo-subtle break-all">{site.title}</span>}
+          {syncing && (
+            <span className="flex items-center gap-1 text-xs text-kumo-subtle">
+              <Loader size="sm" /> renamed — edge still catching up
+            </span>
+          )}
         </div>
       </Table.Cell>
 
@@ -427,6 +438,7 @@ function Row({
 export function App() {
   const [sites, setSites] = useState<Site[] | null>(null)
   const [waiting, setWaiting] = useState(0)
+  const [syncing, setSyncing] = useState<string[]>([])
   const [error, setError] = useState('')
   const totals = totalsOf(sites ?? [])
 
@@ -436,6 +448,7 @@ export function App() {
       const fixed = reconcile(d.sites)
       setSites(fixed.sites)
       setWaiting(fixed.waiting)
+      setSyncing(fixed.syncing)
       setError('')
     } catch (e) {
       setError((e as Error).message)
@@ -468,6 +481,7 @@ export function App() {
     addPending({ type: 'rename', slug, to, at: Date.now() })
     setSites((prev) => prev && prev.map((s) => (s.slug === slug ? { ...s, slug: to } : s)))
     setWaiting((n) => n + 1)
+    setSyncing((prev) => [...prev, to])
   }, [])
 
   return (
@@ -478,12 +492,7 @@ export function App() {
           <p className="text-sm text-kumo-subtle">
             {totals.sites} site{totals.sites === 1 ? '' : 's'} · {totals.files} files on {BASE}
           </p>
-          {waiting > 0 && (
-            <p className="mt-1 text-xs text-kumo-subtle">
-              {waiting} recent change{waiting === 1 ? '' : 's'} still propagating — Cloudflare
-              KV takes up to a minute to agree. Shown here already.
-            </p>
-          )}
+
         </div>
         <div className="flex w-full items-end gap-3 sm:w-auto">
           <div className="w-full sm:w-64">
@@ -505,6 +514,15 @@ export function App() {
           </Button>
         </div>
       </header>
+
+      {waiting > 0 && (
+        <Banner
+          className="mb-4"
+          icon={<CloudArrowUpIcon />}
+          title={`${waiting} change${waiting === 1 ? '' : 's'} still reaching the edge`}
+          description="Cloudflare KV takes up to a minute to agree across regions. What you see here is already correct, and it will settle on its own."
+        />
+      )}
 
       {error && (
         <Empty
@@ -548,6 +566,7 @@ export function App() {
               <Row
                 key={s.slug}
                 site={s}
+                syncing={syncing.includes(s.slug)}
                 onDeleted={() => dropSite(s.slug)}
                 onAccess={(a) => setAccess(s.slug, a)}
                 onRenamed={(to) => renameSite(s.slug, to)}
