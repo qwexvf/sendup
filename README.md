@@ -86,6 +86,7 @@ sendup publish page.html --ttl 30       # deletes itself after 30 days
 sendup list
 sendup rm <slug>
 sendup rename <slug> <new-name>         # move a site to a different subdomain
+sendup pull [file|dir]                  # what changed on the server since you published
 sendup doctor [--fix]                   # check local config against Cloudflare
 sendup token <TOKEN>                    # swap the stored API token, no API call
 ```
@@ -111,6 +112,27 @@ pointed at the same account.
 > Workers KV caches reads for 60 seconds and that is also the floor, so it cannot be
 > tuned down. First-time publishes are immediate. This applies to access changes too —
 > adding a password to a live page leaves it briefly open.
+
+### Seeing what changed elsewhere
+
+Renames follow automatically — the source-path mapping lives in KV, so publishing the
+same file after someone renamed it in the dashboard lands on the new subdomain without
+any local sync. What you cannot otherwise see is *that it moved*. `sendup pull` reports
+it:
+
+```console
+$ sendup pull
+renamed    /home/you/proposal/index.html
+           5f2a1c0e -> https://client-proposal.example.com/
+unchanged  /home/you/notes/index.html
+           https://notes.example.com/
+
+1 change, local record updated
+```
+
+It compares a local record of what this machine published (`~/.config/sendup/published.json`,
+slug only — no content) against the server, and reports `renamed`, `gone`, `new here` or
+`unchanged`. Pass a path to check just one.
 
 ### Checking the setup
 

@@ -118,6 +118,47 @@ func (c *Config) require(fields ...string) {
 	}
 }
 
+// ---------- local record of what went where ----------
+//
+// The authoritative source-path -> slug mapping lives in KV, so publishing always finds
+// the right site even if someone renamed it elsewhere. This file exists only so we can
+// tell you *that it changed* — without a local last-known value there is nothing to
+// compare against.
+
+type published map[string]string // absolute source path -> slug
+
+func publishedPath() string { return filepath.Join(configDir(), "published.json") }
+
+func loadPublished() published {
+	p := published{}
+	data, err := os.ReadFile(publishedPath())
+	if err != nil {
+		return p
+	}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return published{} // a corrupt cache is not worth failing a publish over
+	}
+	return p
+}
+
+func (p published) save() {
+	if err := os.MkdirAll(configDir(), 0o700); err != nil {
+		return
+	}
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(publishedPath(), append(data, '\n'), 0o600)
+	_ = os.Chmod(publishedPath(), 0o600)
+}
+
+func rememberPublished(absPath, slug string) {
+	p := loadPublished()
+	p[absPath] = slug
+	p.save()
+}
+
 // ---------- cloudflare api ----------
 
 type cfError struct {
@@ -883,6 +924,8 @@ func cmdPublish(args []string) {
 		}
 	}
 
+	rememberPublished(absTarget, slug) // so `sendup pull` can spot a later rename
+
 	fmt.Printf("https://%s.%s/\n", slug, cfg.Domain)
 	extra := ""
 	if ttl > 0 {
@@ -1134,6 +1177,9 @@ func cmdRename(args []string) {
 	body, _ := json.Marshal(old)
 	cf(cfg, http.MethodPost, base+"/bulk/delete", body, false)
 
+	if p := metaString(meta, "path"); p != "" {
+		rememberPublished(p, to)
+	}
 	fmt.Printf("https://%s.%s/\n", to, cfg.Domain)
 	fmt.Fprintf(os.Stderr, "  moved %d file%s from %s\n", len(files), plural(len(files)), from)
 	if _, gated := meta["link"]; gated {
@@ -1169,6 +1215,91 @@ func kvValue(cfg *Config, base, key string) []byte {
 		die("API %d reading %s: %s", res.StatusCode, key, truncate(string(raw), 200))
 	}
 	return raw
+}
+
+// cmdPull reports what changed on the server since this machine last published —
+// renames or deletions done from the dashboard or another machine.
+func cmdPull(args []string) {
+	cfg := loadConfig()
+	cfg.require("apiToken", "accountId", "namespaceId", "domain")
+
+	only := ""
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			die("unknown flag %s", a)
+		}
+		if only != "" {
+			die("usage: sendup pull [file|dir]")
+		}
+		abs, err := filepath.Abs(a)
+		if err != nil {
+			die("cannot resolve %s: %v", a, err)
+		}
+		only = abs
+	}
+
+	// server truth: source path -> slug
+	live := map[string]string{}
+	slugs := map[string]bool{}
+	for _, k := range listKeys(cfg, "__index:") {
+		slug := strings.TrimPrefix(k.Name, "__index:")
+		slugs[slug] = true
+		if p := metaString(k.Metadata, "path"); p != "" {
+			live[p] = slug
+		}
+	}
+
+	known := loadPublished()
+	paths := make([]string, 0, len(known)+len(live))
+	seen := map[string]bool{}
+	for p := range known {
+		if !seen[p] {
+			paths, seen[p] = append(paths, p), true
+		}
+	}
+	for p := range live {
+		if !seen[p] {
+			paths, seen[p] = append(paths, p), true
+		}
+	}
+	sort.Strings(paths)
+
+	changes := 0
+	for _, p := range paths {
+		if only != "" && p != only {
+			continue
+		}
+		was, hadLocal := known[p]
+		now, onServer := live[p]
+
+		switch {
+		case hadLocal && onServer && was != now:
+			changes++
+			fmt.Printf("renamed    %s\n           %s -> https://%s.%s/\n", p, was, now, cfg.Domain)
+			known[p] = now
+		case hadLocal && !onServer:
+			changes++
+			fmt.Printf("gone       %s\n           %s no longer exists\n", p, was)
+			delete(known, p)
+		case !hadLocal && onServer:
+			changes++
+			fmt.Printf("new here   %s\n           https://%s.%s/\n", p, now, cfg.Domain)
+			known[p] = now
+		default:
+			fmt.Printf("unchanged  %s\n           https://%s.%s/\n", p, now, cfg.Domain)
+		}
+	}
+
+	if only != "" && !seen[only] {
+		die("%s has never been published from this machine, and no site records it as its source", only)
+	}
+	known.save()
+
+	if changes == 0 {
+		fmt.Fprintln(os.Stderr, "\nnothing changed")
+	} else {
+		fmt.Fprintf(os.Stderr, "\n%d change%s, local record updated\n", changes, plural(changes))
+	}
 }
 
 // cmdDoctor compares local config against what Cloudflare actually has, and against the
@@ -1378,6 +1509,7 @@ func usage() {
   sendup list
   sendup rm <slug>
   sendup rename <slug> <new-name>
+  sendup pull [file|dir]                         what changed on the server since you published
   sendup doctor [--fix]                          check local config against Cloudflare
   sendup admin [--user NAME] [--password PASS]   set up the dashboard
   sendup token <TOKEN>                           swap the stored API token
@@ -1437,6 +1569,8 @@ func main() {
 		cmdRename(args)
 	case "doctor", "check":
 		cmdDoctor(args)
+	case "pull", "sync":
+		cmdPull(args)
 	case "init":
 		cmdInit(args)
 	case "help", "-h", "--help":

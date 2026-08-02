@@ -50,6 +50,7 @@ the missing permission in the error, but this is the full map.
 | `rm` | `GET .../keys`, `POST .../bulk/delete` | Account > Workers KV Storage > Edit |
 | `rename` | `GET .../keys`, `GET .../values/:key`, `PUT .../bulk`, `POST .../bulk/delete` | Account > Workers KV Storage > Edit |
 | `admin` | `PUT .../bulk` | Account > Workers KV Storage > Edit |
+| `pull` | `GET .../keys` | Account > Workers KV Storage > Edit |
 | `doctor` | all of the above, read-only | whatever the token has; missing ones are reported as `warn` and skipped |
 | `wrangler deploy` | upload script | Account > Workers Scripts > Edit |
 | `wrangler deploy` | bind `*.domain/*` | Zone > Workers Routes > Edit |
