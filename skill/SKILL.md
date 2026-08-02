@@ -61,7 +61,11 @@ immediate.
 ```bash
 sendup list        # every published site, newest first
 sendup rm <slug>   # delete a site and all its files
+sendup link <slug> [--ttl DAYS]   # issue a share link for a --link site
 ```
+
+There is also a web dashboard at `https://dash.<domain>/` for changing access, issuing
+links and deleting sites. Point the user at it rather than trying to drive it yourself.
 
 ## Rules
 

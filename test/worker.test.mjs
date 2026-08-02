@@ -19,6 +19,18 @@ const SITES = {
   async get(k) {
     return store.has(k) ? 'x' : null
   },
+  async put(k, v, opts) {
+    store.set(k, { v: new TextEncoder().encode(v).buffer, m: opts?.metadata ?? null })
+  },
+  async delete(k) {
+    store.delete(k)
+  },
+  async list({ prefix }) {
+    const keys = [...store.keys()]
+      .filter((k) => k.startsWith(prefix))
+      .map((k) => ({ name: k, metadata: store.get(k).m }))
+    return { keys, list_complete: true, cursor: null }
+  },
 }
 const env = { SITES, BASE_DOMAIN: 'example.com' }
 
@@ -69,8 +81,8 @@ const sha256hex = async (s) =>
     .join('')
 const auth = { salt: SALT, hash: await sha256hex(SALT + 'sendup:hunter2') }
 
-put('sec:/index.html', '<h1>secret</h1>', { auth })
-put('sec:/deep/page.html', 'deep', { auth })
+put('sec:/index.html', '<h1>secret</h1>', null)
+put('sec:/deep/page.html', 'deep', null)
 store.set('__index:sec', { v: new TextEncoder().encode('').buffer, m: { auth } })
 
 const basic = (u, p) => ({ authorization: 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64') })
@@ -123,10 +135,10 @@ const mint = async (slug, exp) => {
   return `${exp}.${[...mac.slice(0, 16)].map((b) => b.toString(16).padStart(2, '0')).join('')}`
 }
 
-put('lnk:/index.html', '<h1>link only</h1>', { link: SECRET })
+put('lnk:/index.html', '<h1>link only</h1>', null)
 store.set('__index:lnk', { v: new TextEncoder().encode('').buffer, m: { link: SECRET } })
 // a site carrying both credentials — either should open it
-put('both:/index.html', '<h1>both</h1>', { link: SECRET, auth })
+put('both:/index.html', '<h1>both</h1>', null)
 store.set('__index:both', { v: new TextEncoder().encode('').buffer, m: { link: SECRET, auth } })
 
 const forever = await mint('lnk', 0)
@@ -170,5 +182,85 @@ await check('link: miss is gated too', new Request('https://lnk.example.com/nope
 await check('both: link alone works', new Request('https://both.example.com/', { headers: cookie(await mint('both', 0)) }), 200)
 await check('both: password alone works', new Request('https://both.example.com/', { headers: basic('sendup', 'hunter2') }), 200)
 await check('both: neither is refused with a prompt', new Request('https://both.example.com/'), 401)
+
+// ---- dashboard ----
+
+const ADMIN_SALT = 'ffeeddccbbaa99887766554433221100'
+store.set('__admin', {
+  v: new TextEncoder().encode('').buffer,
+  m: { salt: ADMIN_SALT, hash: await sha256hex(ADMIN_SALT + 'admin:letmein') },
+})
+
+const DASH = 'https://dash.example.com'
+const admin = basic('admin', 'letmein')
+const post = (path, body, extra = {}) =>
+  new Request(DASH + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-sendup': '1', ...admin, ...extra },
+    body: JSON.stringify(body || {}),
+  })
+
+await check('dash: no credentials', new Request(DASH + '/'), 401)
+await check('dash: wrong password', new Request(DASH + '/', { headers: basic('admin', 'nope') }), 401)
+const ui = await check('dash: UI served when authed', new Request(DASH + '/', { headers: admin }), 200)
+const uiBody = await ui.text()
+console.log(uiBody.includes('<title>sendup</title>') ? 'ok   dash: UI is html' : 'FAIL dash: UI body')
+console.log(
+  !uiBody.includes('__BASE__') && uiBody.includes("BASE = 'example.com'")
+    ? 'ok   dash: base domain injected'
+    : 'FAIL dash: base domain not substituted'
+)
+
+// CSRF: browsers replay Basic auth cross-site, so the custom header is the real guard
+await check(
+  'dash: rejects call without x-sendup header',
+  new Request(DASH + '/api/list', { method: 'POST', headers: { ...admin }, body: '{}' }),
+  400
+)
+await check(
+  'dash: rejects cross-origin call',
+  post('/api/list', {}, { 'sec-fetch-site': 'cross-site' }),
+  403
+)
+await check('dash: api needs auth too', new Request(DASH + '/api/list', { method: 'POST', headers: { 'x-sendup': '1' }, body: '{}' }), 401)
+await check('dash: GET on api is 404', new Request(DASH + '/api/list', { headers: admin }), 404)
+await check('dash: bad slug rejected', post('/api/delete', { slug: 'Not A Slug' }), 400)
+
+const listed = await check('dash: list', post('/api/list'), 200)
+const data = await listed.json()
+console.log(
+  data.sites.some((s) => s.slug === 'sec' && s.access === 'auth') &&
+    data.sites.some((s) => s.slug === 'lnk' && s.access === 'link') &&
+    data.sites.some((s) => s.slug === 'abc' && s.access === 'open') &&
+    data.sites.some((s) => s.slug === 'both' && s.access === 'both')
+    ? 'ok   dash: access mode reported per site'
+    : `FAIL dash: modes ${JSON.stringify(data.sites.map((s) => [s.slug, s.access]))}`
+)
+console.log(data.totals.sites === data.sites.length ? 'ok   dash: totals' : 'FAIL dash: totals')
+
+// toggling access must actually change what the site serves
+await check('dash: set abc to link-only', post('/api/access', { slug: 'abc', mode: 'link' }), 200)
+await check('dash: abc now refuses anonymous', new Request('https://abc.example.com/'), 403)
+const issued = await check('dash: mint a link for abc', post('/api/link', { slug: 'abc' }), 200)
+const issuedURL = (await issued.json()).url
+await check('dash: minted link opens abc', new Request(issuedURL), 302)
+
+await check('dash: rotate revokes it', post('/api/rotate', { slug: 'abc' }), 200)
+await check('dash: old link now dead', new Request(issuedURL), 403)
+
+const pw = await check('dash: switch abc to password', post('/api/access', { slug: 'abc', mode: 'auth', user: 'me', pass: 'pw123' }), 200)
+console.log((await pw.json()).password === 'me / pw123' ? 'ok   dash: password echoed once' : 'FAIL dash: password echo')
+await check('dash: abc prompts for password', new Request('https://abc.example.com/'), 401)
+await check('dash: abc opens with password', new Request('https://abc.example.com/', { headers: basic('me', 'pw123') }), 200)
+
+await check('dash: back to open', post('/api/access', { slug: 'abc', mode: 'open' }), 200)
+await check('dash: abc public again', new Request('https://abc.example.com/'), 200)
+await check('dash: bad mode rejected', post('/api/access', { slug: 'abc', mode: 'bogus' }), 400)
+await check('dash: link on a non-link site', post('/api/link', { slug: 'abc' }), 400)
+
+// delete must take the files with it
+await check('dash: delete bare', post('/api/delete', { slug: 'bare' }), 200)
+await check('dash: deleted site is gone', new Request('https://bare.example.com/'), 404)
+console.log(!store.has('bare:/index.html') ? 'ok   dash: files removed on delete' : 'FAIL dash: files left behind')
 
 process.exit(fail ? 1 : 0)

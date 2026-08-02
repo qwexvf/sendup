@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"net/http"
@@ -74,7 +75,7 @@ func loadConfig() *Config {
 	if t := os.Getenv("CLOUDFLARE_API_TOKEN"); t != "" {
 		cfg.APIToken = t
 	}
-	if d := os.Getenv("DEVDOX_DOMAIN"); d != "" {
+	if d := os.Getenv("SENDUP_DOMAIN"); d != "" {
 		cfg.Domain = d
 	}
 	return cfg
@@ -206,6 +207,28 @@ func truncate(s string, n int) string {
 // ---------- helpers ----------
 
 var slugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$`)
+
+// dash.<domain> is the dashboard; www/api are the names people reach for by reflex
+var reserved = map[string]bool{"dash": true, "www": true, "api": true}
+
+var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+// pageTitle pulls <title> out of an HTML document for the dashboard listing.
+func pageTitle(buf []byte) string {
+	if len(buf) > 64<<10 {
+		buf = buf[:64<<10] // the head is at the front; don't scan a huge document
+	}
+	m := titleRe.FindSubmatch(buf)
+	if m == nil {
+		return ""
+	}
+	t := strings.TrimSpace(html.UnescapeString(string(m[1])))
+	t = strings.Join(strings.Fields(t), " ")
+	if len(t) > 120 {
+		t = t[:120]
+	}
+	return t
+}
 
 func newSlug() string {
 	var b [8]byte // 64 bits
@@ -689,6 +712,9 @@ func cmdPublish(args []string) {
 		if !slugRe.MatchString(slug) {
 			die("name must be lowercase letters, digits and hyphens, 2-63 chars — it becomes a hostname label")
 		}
+		if reserved[slug] {
+			die("%q is reserved", slug)
+		}
 	}
 
 	// One scan of the site records covers both jobs: finding the slug this source was
@@ -761,6 +787,7 @@ func cmdPublish(args []string) {
 	files := collectFiles(target)
 	pairs := make([]kvPair, 0, len(files)+1)
 	var total int64
+	title := ""
 
 	for _, f := range files {
 		if f.size > maxValue {
@@ -772,19 +799,16 @@ func cmdPublish(args []string) {
 		}
 		total += int64(len(buf))
 		sum := sha256.Sum256(buf)
-		meta := map[string]any{"etag": `"` + hex.EncodeToString(sum[:])[:32] + `"`}
-		// on each object so a credentialed hit costs no extra KV read
-		if authMeta != nil {
-			meta["auth"] = authMeta
+		if f.path == "/index.html" {
+			title = pageTitle(buf)
 		}
-		if linkSecret != "" {
-			meta["link"] = linkSecret
-		}
+		// access config lives only on the site record, so the dashboard can change it
+		// with one write instead of rewriting every file
 		pairs = append(pairs, kvPair{
 			Key:           slug + ":" + f.path,
 			Value:         base64.StdEncoding.EncodeToString(buf),
 			Base64:        true,
-			Metadata:      meta,
+			Metadata:      map[string]any{"etag": `"` + hex.EncodeToString(sum[:])[:32] + `"`},
 			ExpirationTTL: ttl,
 		})
 	}
@@ -795,6 +819,9 @@ func cmdPublish(args []string) {
 		"bytes":   total,
 		"src":     filepath.Base(absTarget),
 		"path":    absTarget, // how a later publish finds its way back to this slug
+	}
+	if title != "" {
+		meta["title"] = title
 	}
 	if ttl > 0 {
 		meta["expires"] = time.Now().UTC().Add(time.Duration(ttl) * time.Second).Format(time.RFC3339)
@@ -921,6 +948,46 @@ func cmdList(args []string) {
 	}
 }
 
+func cmdAdmin(args []string) {
+	cfg := loadConfig()
+	cfg.require("apiToken", "accountId", "namespaceId", "domain")
+
+	user, pass := "admin", ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--password":
+			i++
+			if i < len(args) {
+				pass = args[i]
+			}
+		case "--user":
+			i++
+			if i < len(args) {
+				user = args[i]
+			}
+		default:
+			die("unknown argument %s", args[i])
+		}
+	}
+	if pass == "" {
+		pass = newPassword()
+	}
+
+	salt, hash := hashCreds(user, pass)
+	body, _ := json.Marshal([]kvPair{{
+		Key:      "__admin",
+		Value:    "",
+		Metadata: map[string]any{"salt": salt, "hash": hash},
+	}})
+	cf(cfg, http.MethodPut,
+		fmt.Sprintf("/accounts/%s/storage/kv/namespaces/%s/bulk", cfg.AccountID, cfg.NamespaceID),
+		body, false)
+
+	fmt.Printf("https://dash.%s/\n", cfg.Domain)
+	fmt.Fprintf(os.Stderr, "  login  %s / %s\n", user, pass)
+	fmt.Fprintf(os.Stderr, "  only the salted hash is stored — rerun this to change it\n")
+}
+
 func cmdLink(args []string) {
 	cfg := loadConfig()
 	cfg.require("apiToken", "accountId", "namespaceId", "domain")
@@ -1014,6 +1081,7 @@ func usage() {
   sendup link <slug> [--ttl DAYS]
   sendup list
   sendup rm <slug>
+  sendup admin [--user NAME] [--password PASS]   set up the dashboard
   sendup init [--token TOKEN] [--domain example.com] [--skip-dns]
 
 A single .html file becomes the site root. A directory is uploaded as-is;
@@ -1052,6 +1120,8 @@ func main() {
 		cmdList(args)
 	case "link":
 		cmdLink(args)
+	case "admin":
+		cmdAdmin(args)
 	case "rm", "delete":
 		cmdRm(args)
 	case "init":

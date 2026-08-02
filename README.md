@@ -169,6 +169,43 @@ Everything here rests on TLS, and Cloudflare terminates TLS — so Cloudflare ca
 pages in plaintext. This is access control for documents, not a secrets store. Don't
 publish credentials or personal data.
 
+## Dashboard
+
+```bash
+sendup admin --user you            # prints a generated password, once
+```
+
+Then open `https://dash.example.com/` — same Worker, no extra deploy. It lists every
+site with its title, size, age and access mode, and lets you:
+
+- **switch access** between open / signed link / password, without republishing the
+  files (the config lives on the site record, so a toggle is a single write)
+- **issue share links**, with or without a 7-day expiry, copied to the clipboard
+- **revoke** every link issued for a site
+- **delete** a site and all its files, behind a confirm
+- watch storage against the 1 GB free-tier ceiling
+
+Vanilla JS and inline CSS — no framework, no build step, ~8 KB served.
+
+`dash`, `www` and `api` are reserved and cannot be published as site names.
+
+### Dashboard security
+
+The dashboard can delete everything you have published, so it is worth knowing exactly
+what stands in front of it:
+
+- HTTP Basic auth against a salted SHA-256 in KV, compared in constant time. It is a
+  separate credential from any page password.
+- Browsers replay Basic auth on cross-site requests, so every mutating call also
+  requires an `X-Sendup: 1` header — which a cross-origin page cannot set without a CORS
+  preflight the Worker never answers — and rejects a non-same-origin `Sec-Fetch-Site`.
+- Responses are `no-store`, the page is `noindex`, and a strict CSP blocks any external
+  fetch.
+
+If you would rather not have a delete endpoint on the public internet at all, don't run
+`sendup admin` — every action above also exists as a CLI command, and without the
+`__admin` record the dashboard returns 503 to everyone.
+
 ## Limits
 
 Cloudflare free tier:
@@ -198,8 +235,8 @@ ln -s "$PWD/skill" ~/.claude/skills/sendup
 
 ```
 cli/main.go           the CLI — Go stdlib only, no dependencies
-src/worker.js         the Worker — ~260 lines, no dependencies
-test/worker.test.mjs  47 assertions, runs under plain node (npm test)
+src/worker.js         the Worker + dashboard — no dependencies, no build step
+test/worker.test.mjs  77 assertions, runs under plain node (npm test)
 wrangler.jsonc        deploy config, rewritten by `sendup init`
 ```
 
