@@ -26,6 +26,17 @@ With `--auth`, the generated password is printed **once** and only its salted ha
 stored. Relay it to the user along with the URL, and tell them it can't be recovered —
 changing it means republishing.
 
+## Republishing
+
+Publishing the same path again reuses the subdomain it went to last time — the shared
+URL keeps working, deleted files are swept, and existing auth is carried over. Use
+`--new` to force a fresh subdomain, `--no-auth` to remove a gate.
+
+Updates take up to ~60s to appear at an edge that already served the old version (Workers
+KV read cache). Don't report a republish as live-and-verified straight after running it;
+if the user needs confirmation, wait a minute before checking. First-time publishes are
+immediate.
+
 ## Manage
 
 ```bash

@@ -551,7 +551,7 @@ func cmdPublish(args []string) {
 
 	target, slug := "", ""
 	ttlDays := 0.0
-	wantAuth := false
+	wantAuth, noAuth, forceNew := false, false, false
 	authUser, authPass := "", ""
 
 	for i := 0; i < len(args); i++ {
@@ -573,6 +573,10 @@ func cmdPublish(args []string) {
 				}
 				authUser, authPass = u, p
 			}
+		case a == "--no-auth":
+			noAuth = true
+		case a == "--new":
+			forceNew = true
 		case a == "--ttl":
 			i++
 			if i < len(args) {
@@ -591,7 +595,15 @@ func cmdPublish(args []string) {
 		}
 	}
 	if target == "" {
-		die("usage: devdox publish <file|dir> [--slug NAME] [--ttl DAYS] [--auth [user:pass]]")
+		die("usage: devdox publish <file|dir> [--slug NAME] [--ttl DAYS] [--auth [user:pass]] [--no-auth] [--new]")
+	}
+	if wantAuth && noAuth {
+		die("--auth and --no-auth contradict each other")
+	}
+
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		die("cannot resolve %s: %v", target, err)
 	}
 
 	if slug != "" {
@@ -599,8 +611,39 @@ func cmdPublish(args []string) {
 		if !slugRe.MatchString(slug) {
 			die("--slug must be lowercase letters, digits and hyphens")
 		}
-	} else {
+	}
+
+	// One scan of the site records covers both jobs: finding the slug this source was
+	// last published to, and recovering that site's settings.
+	index := map[string]map[string]any{}
+	if !forceNew {
+		for _, k := range listKeys(cfg, "__index:") {
+			index[strings.TrimPrefix(k.Name, "__index:")] = k.Metadata
+		}
+	}
+
+	reused := false
+	if slug == "" && !forceNew {
+		// most recent wins if the same source was somehow published twice
+		best := ""
+		for s, m := range index {
+			if metaString(m, "path") != absTarget {
+				continue
+			}
+			if best == "" || metaString(m, "created") > metaString(index[best], "created") {
+				best = s
+			}
+		}
+		if best != "" {
+			slug, reused = best, true
+		}
+	}
+	if slug == "" {
 		slug = newSlug()
+	}
+	prevMeta, existed := index[slug]
+	if existed && !reused {
+		reused = true // explicit --slug pointing at a site that already exists
 	}
 
 	var ttl int64
@@ -609,12 +652,21 @@ func cmdPublish(args []string) {
 	}
 
 	var authMeta map[string]any
-	if wantAuth {
+	authCarried := false
+	switch {
+	case wantAuth:
 		if authUser == "" {
 			authUser, authPass = "devdox", newPassword()
 		}
 		salt, hash := hashCreds(authUser, authPass)
 		authMeta = map[string]any{"salt": salt, "hash": hash}
+	case noAuth:
+		// explicit opt-out; leave authMeta nil so the republish drops the gate
+	default:
+		// republishing must never silently unprotect a site
+		if prev, ok := prevMeta["auth"].(map[string]any); ok {
+			authMeta, authCarried = prev, true
+		}
 	}
 
 	files := collectFiles(target)
@@ -645,12 +697,12 @@ func cmdPublish(args []string) {
 		})
 	}
 
-	absTarget, _ := filepath.Abs(target)
 	meta := map[string]any{
 		"created": time.Now().UTC().Format(time.RFC3339),
 		"files":   len(files),
 		"bytes":   total,
 		"src":     filepath.Base(absTarget),
+		"path":    absTarget, // how a later publish finds its way back to this slug
 	}
 	if ttl > 0 {
 		meta["expires"] = time.Now().UTC().Add(time.Duration(ttl) * time.Second).Format(time.RFC3339)
@@ -662,6 +714,28 @@ func cmdPublish(args []string) {
 
 	bulkPut(cfg, pairs)
 
+	// drop files the previous publish left behind, otherwise deleted pages keep serving
+	swept := 0
+	if reused {
+		fresh := make(map[string]bool, len(files))
+		for _, f := range files {
+			fresh[slug+":"+f.path] = true
+		}
+		var stale []string
+		for _, k := range listKeys(cfg, slug+":") {
+			if !fresh[k.Name] {
+				stale = append(stale, k.Name)
+			}
+		}
+		if len(stale) > 0 {
+			body, _ := json.Marshal(stale)
+			cf(cfg, http.MethodPost,
+				fmt.Sprintf("/accounts/%s/storage/kv/namespaces/%s/bulk/delete", cfg.AccountID, cfg.NamespaceID),
+				body, false)
+			swept = len(stale)
+		}
+	}
+
 	fmt.Printf("https://%s.%s/\n", slug, cfg.Domain)
 	plural := "s"
 	if len(files) == 1 {
@@ -671,11 +745,24 @@ func cmdPublish(args []string) {
 	if ttl > 0 {
 		extra = fmt.Sprintf(", expires in %g days", ttlDays)
 	}
-	fmt.Fprintf(os.Stderr, "  %d file%s, %s%s\n", len(files), plural, fmtBytes(total), extra)
-	if authMeta != nil {
+	where := "new site"
+	if reused {
+		where = "updated in place"
+		if swept > 0 {
+			where += fmt.Sprintf(", %d stale file%s removed", swept, map[bool]string{true: "", false: "s"}[swept == 1])
+		}
+	}
+	fmt.Fprintf(os.Stderr, "  %d file%s, %s%s (%s)\n", len(files), plural, fmtBytes(total), extra, where)
+
+	switch {
+	case authMeta != nil && authCarried:
+		fmt.Fprintf(os.Stderr, "  basic auth  kept from the previous publish (--no-auth to remove)\n")
+	case authMeta != nil:
 		// only the salted hash reaches KV — this is the one time the password is shown
 		fmt.Fprintf(os.Stderr, "  basic auth  %s / %s\n", authUser, authPass)
 		fmt.Fprintf(os.Stderr, "  not recoverable later — republish to change it\n")
+	case noAuth && reused:
+		fmt.Fprintf(os.Stderr, "  basic auth  removed — the page is now open to anyone with the URL\n")
 	}
 }
 
@@ -750,17 +837,22 @@ func usage() {
 	fmt.Println(`devdox — publish static pages to *.example.com
 
   devdox publish <file|dir> [--slug NAME] [--ttl DAYS] [--auth [user:pass]]
+                            [--no-auth] [--new]
   devdox list
   devdox rm <slug>
   devdox init [--token TOKEN] [--domain example.com] [--skip-dns]
 
 A single .html file becomes the site root. A directory is uploaded as-is;
-index.html at its root becomes "/". Slugs are 16 random hex chars unless
---slug is given.
+index.html at its root becomes "/".
+
+Publishing the same file or directory again reuses the subdomain it went to
+last time, so the URL you shared keeps working. Files removed since the last
+publish are swept. --new forces a fresh subdomain, --slug picks one by hand.
 
 Without --auth a page is readable by anyone holding the URL, and is sent with
 X-Robots-Tag: noindex. With --auth it is gated by HTTP Basic auth; bare --auth
-generates the credentials and prints them once.`)
+generates the credentials and prints them once. A republish keeps whatever auth
+the site already had unless --no-auth is passed.`)
 }
 
 func main() {

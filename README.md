@@ -71,6 +71,23 @@ A single `.html` file is uploaded as `/index.html`. A directory is uploaded verb
 dotfiles skipped. Extensionless paths fall back to `<path>/index.html`, and a
 `404.html` at the site root is used for misses.
 
+### Republishing
+
+Publishing the same file or directory again reuses the subdomain it went to last time,
+so a URL you have already shared keeps working. The mapping lives in the site's
+`__index:` record in KV — keyed on the absolute source path — rather than in local
+state, so it survives from any machine pointed at the same account.
+
+- files deleted since the last publish are swept, so removed pages stop serving
+- existing Basic auth is carried over; `--no-auth` removes it
+- `--new` forces a fresh subdomain and repoints the source at it, orphaning the old site
+- `--slug NAME` overrides the lookup entirely
+
+**A republish takes up to ~60 seconds to appear at an edge that already served the old
+version.** Workers KV caches reads for 60s and that is also the minimum, so it cannot be
+tuned down. A first-time publish is visible immediately; only updates are affected. This
+applies to auth changes too — adding `--auth` to a live site leaves it briefly open.
+
 ## Claude Code
 
 `skill/SKILL.md` is the skill definition. Install it with:
