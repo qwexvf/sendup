@@ -59,6 +59,10 @@ Scope Zone Resources to your domain. Account-owned tokens (Manage Account → AP
 **cannot hold zone permissions at all** — if the editor shows no Zone section, that's
 why.
 
+Only the first row is needed day to day. See **[docs/PERMISSIONS.md](docs/PERMISSIONS.md)**
+for the per-command breakdown, how to avoid granting DNS access at all, and how to swap
+in a narrower publish-only token afterwards.
+
 ```bash
 sendup init --token <TOKEN> --domain example.com
 CLOUDFLARE_API_TOKEN=<TOKEN> npx wrangler deploy
@@ -78,6 +82,7 @@ sendup publish page.html --name demo    # -> https://demo.example.com/
 sendup publish page.html --ttl 30       # deletes itself after 30 days
 sendup list
 sendup rm <slug>
+sendup token <TOKEN>                    # swap the stored API token, no API call
 ```
 
 A single `.html` file is uploaded as `/index.html`. A directory is uploaded verbatim,
@@ -160,10 +165,14 @@ password prompt.
 
 ### Notes
 
-Credentials ride on each object's metadata, so a permitted request costs no extra KV
-read. They're also on the site record, which the Worker consults on a miss — without
-that, an outsider could map which paths exist by watching 404 versus 403. Gated
-responses are sent `Cache-Control: private, no-store` and `Vary: Authorization, Cookie`.
+Access config lives on the site record only, never on individual files, so changing it is
+a single write rather than one per file. The Worker fetches that record in parallel with
+the file, which costs one extra KV read per request — halving the effective free-tier
+read budget to roughly 50,000 page views a day.
+
+The record is also what gates a miss: without it, an outsider could map which paths exist
+by watching 404 versus 403. Gated responses are sent `Cache-Control: private, no-store`
+and `Vary: Authorization, Cookie`.
 
 Everything here rests on TLS, and Cloudflare terminates TLS — so Cloudflare can see your
 pages in plaintext. This is access control for documents, not a secrets store. Don't
@@ -264,4 +273,4 @@ cd dash && bun test      # dashboard: real React render against a stubbed API
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

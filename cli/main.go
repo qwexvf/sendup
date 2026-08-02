@@ -82,8 +82,9 @@ func loadConfig() *Config {
 }
 
 func (c *Config) save() {
-	if err := os.MkdirAll(configDir(), 0o700); err != nil {
-		die("cannot create %s: %v", configDir(), err)
+	dir := configDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		die("cannot create %s: %v", dir, err)
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -91,6 +92,14 @@ func (c *Config) save() {
 	}
 	if err := os.WriteFile(configPath(), append(data, '\n'), 0o600); err != nil {
 		die("cannot write %s: %v", configPath(), err)
+	}
+	// MkdirAll and WriteFile both leave an existing path's mode alone, so a config that
+	// was ever created loosely would stay that way. This holds an API token.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		die("cannot secure %s: %v", dir, err)
+	}
+	if err := os.Chmod(configPath(), 0o600); err != nil {
+		die("cannot secure %s: %v", configPath(), err)
 	}
 }
 
@@ -948,6 +957,19 @@ func cmdList(args []string) {
 	}
 }
 
+// cmdToken swaps the stored API token without calling Cloudflare, so a narrower
+// publish-only token can replace the one `init` needed.
+func cmdToken(args []string) {
+	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
+		die("usage: sendup token <TOKEN>")
+	}
+	cfg := loadConfig()
+	cfg.require("accountId", "namespaceId", "domain")
+	cfg.APIToken = args[0]
+	cfg.save()
+	fmt.Fprintf(os.Stderr, "stored in %s\n", configPath())
+}
+
 func cmdAdmin(args []string) {
 	cfg := loadConfig()
 	cfg.require("apiToken", "accountId", "namespaceId", "domain")
@@ -1082,6 +1104,7 @@ func usage() {
   sendup list
   sendup rm <slug>
   sendup admin [--user NAME] [--password PASS]   set up the dashboard
+  sendup token <TOKEN>                           swap the stored API token
   sendup init [--token TOKEN] [--domain example.com] [--skip-dns]
 
 A single .html file becomes the site root. A directory is uploaded as-is;
@@ -1122,6 +1145,8 @@ func main() {
 		cmdLink(args)
 	case "admin":
 		cmdAdmin(args)
+	case "token":
+		cmdToken(args)
 	case "rm", "delete":
 		cmdRm(args)
 	case "init":
