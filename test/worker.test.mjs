@@ -258,6 +258,41 @@ await check('dash: abc public again', new Request('https://abc.example.com/'), 2
 await check('dash: bad mode rejected', post('/api/access', { slug: 'abc', mode: 'bogus' }), 400)
 await check('dash: link on a non-link site', post('/api/link', { slug: 'abc' }), 400)
 
+// ---- rename ----
+
+put('ren:/index.html', '<h1>renamed</h1>', { etag: '"r1"' })
+put('ren:/deep/a.css', 'body{}', null)
+store.set('__index:ren', { v: new TextEncoder().encode('').buffer, m: { created: '2026-08-01T00:00:00Z', files: 2, link: SECRET } })
+
+await check('rename: bad target', post('/api/rename', { slug: 'ren', to: 'Not Valid' }), 400)
+await check('rename: reserved target', post('/api/rename', { slug: 'ren', to: 'dash' }), 400)
+await check('rename: same name', post('/api/rename', { slug: 'ren', to: 'ren' }), 400)
+await check('rename: target taken', post('/api/rename', { slug: 'ren', to: 'sec' }), 409)
+await check('rename: unknown source', post('/api/rename', { slug: 'nosuchsite', to: 'whatever' }), 404)
+
+const renamed = await check('rename: succeeds', post('/api/rename', { slug: 'ren', to: 'report' }), 200)
+const rBody = await renamed.json()
+console.log(
+  rBody.slug === 'report' && rBody.files === 2 && rBody.linksInvalidated === true
+    ? 'ok   rename: reports new slug, file count and dead links'
+    : `FAIL rename: ${JSON.stringify(rBody)}`
+)
+
+await check('rename: serves at the new name', new Request(`https://report.example.com/?k=${await mint('report', 0)}`), 302)
+await check('rename: old name is gone', new Request('https://ren.example.com/'), 404)
+console.log(
+  !store.has('ren:/index.html') && store.has('report:/index.html') && store.has('report:/deep/a.css')
+    ? 'ok   rename: every file moved, none left behind'
+    : 'FAIL rename: files not moved cleanly'
+)
+console.log(
+  store.get('report:/index.html').m?.etag === '"r1"'
+    ? 'ok   rename: per-file metadata survives'
+    : 'FAIL rename: metadata lost'
+)
+// a token signed for the old slug must not open the new one
+await check('rename: old signed link is dead', new Request(`https://report.example.com/?k=${await mint('ren', 0)}`), 403)
+
 // delete must take the files with it
 await check('dash: delete bare', post('/api/delete', { slug: 'bare' }), 200)
 await check('dash: deleted site is gone', new Request('https://bare.example.com/'), 404)

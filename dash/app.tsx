@@ -4,6 +4,7 @@ import {
   Button,
   Dialog,
   Empty,
+  Input,
   Loader,
   Meter,
   Select,
@@ -15,6 +16,7 @@ import {
   ArrowsClockwiseIcon,
   CloudArrowUpIcon,
   LinkIcon,
+  PencilSimpleIcon,
   TrashIcon,
 } from '@phosphor-icons/react'
 
@@ -121,14 +123,117 @@ function DeleteDialog({ site, onDeleted }: { site: Site; onDeleted: () => void }
   )
 }
 
+function RenameDialog({ site, onRenamed }: { site: Site; onRenamed: (to: string) => void }) {
+  const toast = useKumoToastManager()
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [value, setValue] = useState(site.slug)
+  const [problem, setProblem] = useState('')
+
+  function start(next: boolean) {
+    setOpen(next)
+    if (next) {
+      setValue(site.slug)
+      setProblem('')
+    }
+  }
+
+  async function submit() {
+    const to = value.trim().toLowerCase()
+    if (to === site.slug) return setProblem('That is already its name.')
+    if (!/^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$/.test(to)) {
+      return setProblem('Lowercase letters, digits and hyphens, 2–63 characters.')
+    }
+
+    setBusy(true)
+    setProblem('')
+    try {
+      const r = await api<{ slug: string; linksInvalidated: boolean }>('rename', {
+        slug: site.slug,
+        to,
+      })
+      toast.add({
+        title: `Now at ${r.slug}.${BASE}`,
+        description: r.linksInvalidated
+          ? 'The old URL and every signed link issued for it have stopped working.'
+          : 'The old URL has stopped working.',
+        type: 'success',
+      })
+      setOpen(false)
+      onRenamed(r.slug)
+    } catch (e) {
+      setProblem((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog.Root open={open} onOpenChange={start}>
+      <Dialog.Trigger
+        render={(p) => (
+          <Button
+            {...p}
+            size="xs"
+            shape="square"
+            title="Change subdomain"
+            aria-label={`Change subdomain for ${site.slug}`}
+          >
+            <PencilSimpleIcon />
+          </Button>
+        )}
+      />
+      <Dialog size="lg" className="p-6">
+        <Dialog.Title className="text-lg font-semibold">Change subdomain</Dialog.Title>
+        <Dialog.Description className="mt-2 text-kumo-subtle">
+          Moves {site.files} file{site.files === 1 ? '' : 's'}. The current URL stops working
+          immediately{site.access === 'link' || site.access === 'both'
+            ? ', and every signed link already issued for this site dies with it'
+            : ''}
+          .
+        </Dialog.Description>
+
+        <div className="mt-4">
+          <Input
+            autoFocus
+            name="subdomain"
+            label="Subdomain"
+            description={`https://${value.trim().toLowerCase() || '…'}.${BASE}/`}
+            error={problem || undefined}
+            value={value}
+            disabled={busy}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            autoComplete="off"
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void submit()
+            }}
+          />
+        </div>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <Dialog.Close render={(p) => <Button {...p} variant="secondary">Cancel</Button>} />
+          <Button variant="primary" loading={busy} onClick={submit}>
+            Rename
+          </Button>
+        </div>
+      </Dialog>
+    </Dialog.Root>
+  )
+}
+
 function Row({
   site,
   onDeleted,
   onAccess,
+  onRenamed,
 }: {
   site: Site
   onDeleted: () => void
   onAccess: (access: Access) => void
+  onRenamed: (to: string) => void
 }) {
   const toast = useKumoToastManager()
   const [busy, setBusy] = useState(false)
@@ -246,6 +351,7 @@ function Row({
               </Button>
             </>
           )}
+          <RenameDialog site={site} onRenamed={onRenamed} />
           <DeleteDialog site={site} onDeleted={onDeleted} />
         </div>
       </Table.Cell>
@@ -293,6 +399,10 @@ export function App() {
 
   const setAccess = useCallback((slug: string, access: Access) => {
     setSites((prev) => prev && prev.map((s) => (s.slug === slug ? { ...s, access } : s)))
+  }, [])
+
+  const renameSite = useCallback((slug: string, to: string) => {
+    setSites((prev) => prev && prev.map((s) => (s.slug === slug ? { ...s, slug: to } : s)))
   }, [])
 
   return (
@@ -368,6 +478,7 @@ export function App() {
                 site={s}
                 onDeleted={() => dropSite(s.slug)}
                 onAccess={(a) => setAccess(s.slug, a)}
+                onRenamed={(to) => renameSite(s.slug, to)}
               />
             ))}
           </Table.Body>

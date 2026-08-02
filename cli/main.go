@@ -869,10 +869,6 @@ func cmdPublish(args []string) {
 	}
 
 	fmt.Printf("https://%s.%s/\n", slug, cfg.Domain)
-	plural := "s"
-	if len(files) == 1 {
-		plural = ""
-	}
 	extra := ""
 	if ttl > 0 {
 		extra = fmt.Sprintf(", expires in %g days", ttlDays)
@@ -884,7 +880,7 @@ func cmdPublish(args []string) {
 			where += fmt.Sprintf(", %d stale file%s removed", swept, map[bool]string{true: "", false: "s"}[swept == 1])
 		}
 	}
-	fmt.Fprintf(os.Stderr, "  %d file%s, %s%s (%s)\n", len(files), plural, fmtBytes(total), extra, where)
+	fmt.Fprintf(os.Stderr, "  %d file%s, %s%s (%s)\n", len(files), plural(len(files)), fmtBytes(total), extra, where)
 
 	switch {
 	case authMeta != nil && authCarried:
@@ -1065,6 +1061,101 @@ func cmdLink(args []string) {
 	}
 }
 
+// cmdRename moves every key of a site to a new prefix. KV has no rename, so this is a
+// read + write + delete per file.
+func cmdRename(args []string) {
+	if len(args) != 2 || strings.HasPrefix(args[0], "-") || strings.HasPrefix(args[1], "-") {
+		die("usage: sendup rename <slug> <new-name>")
+	}
+	cfg := loadConfig()
+	cfg.require("apiToken", "accountId", "namespaceId", "domain")
+
+	from := args[0]
+	to := strings.ToLower(strings.TrimSpace(args[1]))
+	if !slugRe.MatchString(to) {
+		die("name must be lowercase letters, digits and hyphens, 2-63 chars")
+	}
+	if reserved[to] {
+		die("%q is reserved", to)
+	}
+	if to == from {
+		die("that is already its name")
+	}
+
+	var meta map[string]any
+	for _, k := range listKeys(cfg, "__index:"+from) {
+		if k.Name == "__index:"+from {
+			meta = k.Metadata
+		}
+	}
+	if meta == nil {
+		die("no site with slug %s", from)
+	}
+	for _, k := range listKeys(cfg, "__index:"+to) {
+		if k.Name == "__index:"+to {
+			die("%s is already taken", to)
+		}
+	}
+
+	base := fmt.Sprintf("/accounts/%s/storage/kv/namespaces/%s", cfg.AccountID, cfg.NamespaceID)
+	files := listKeys(cfg, from+":")
+
+	pairs := make([]kvPair, 0, len(files)+1)
+	old := make([]string, 0, len(files)+1)
+	for _, k := range files {
+		value := kvValue(cfg, base, k.Name)
+		pairs = append(pairs, kvPair{
+			Key:      to + ":" + strings.TrimPrefix(k.Name, from+":"),
+			Value:    base64.StdEncoding.EncodeToString(value),
+			Base64:   true,
+			Metadata: k.Metadata,
+		})
+		old = append(old, k.Name)
+	}
+	pairs = append(pairs, kvPair{Key: "__index:" + to, Value: "", Metadata: meta})
+	old = append(old, "__index:"+from)
+
+	bulkPut(cfg, pairs)
+	body, _ := json.Marshal(old)
+	cf(cfg, http.MethodPost, base+"/bulk/delete", body, false)
+
+	fmt.Printf("https://%s.%s/\n", to, cfg.Domain)
+	fmt.Fprintf(os.Stderr, "  moved %d file%s from %s\n", len(files), plural(len(files)), from)
+	if _, gated := meta["link"]; gated {
+		// tokens are HMACed over the slug, so the old ones can never validate again
+		fmt.Fprintf(os.Stderr, "  every signed link issued for %s is now dead\n", from)
+	}
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// kvValue fetches one key's raw bytes.
+func kvValue(cfg *Config, base, key string) []byte {
+	req, err := http.NewRequest(http.MethodGet, apiBase+base+"/values/"+url.PathEscape(key), nil)
+	if err != nil {
+		die("bad request for %s: %v", key, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.APIToken)
+	res, err := httpClient.Do(req)
+	if err != nil {
+		die("fetching %s failed: %v", key, err)
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		die("reading %s failed: %v", key, err)
+	}
+	if res.StatusCode != http.StatusOK {
+		die("API %d reading %s: %s", res.StatusCode, key, truncate(string(raw), 200))
+	}
+	return raw
+}
+
 func cmdRm(args []string) {
 	if len(args) != 1 {
 		die("usage: sendup rm <slug>")
@@ -1103,6 +1194,7 @@ func usage() {
   sendup link <slug> [--ttl DAYS]
   sendup list
   sendup rm <slug>
+  sendup rename <slug> <new-name>
   sendup admin [--user NAME] [--password PASS]   set up the dashboard
   sendup token <TOKEN>                           swap the stored API token
   sendup init [--token TOKEN] [--domain example.com] [--skip-dns]
@@ -1149,6 +1241,8 @@ func main() {
 		cmdToken(args)
 	case "rm", "delete":
 		cmdRm(args)
+	case "rename", "mv":
+		cmdRename(args)
 	case "init":
 		cmdInit(args)
 	case "help", "-h", "--help":

@@ -31,6 +31,14 @@ const SITES = [
   },
 ]
 
+// React tracks the input's value internally, so assigning .value directly is ignored.
+// Going through the native setter is what makes onChange fire.
+function type(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+  setter.call(input, value)
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 let root: Root | null = null
 let host: HTMLElement | null = null
 
@@ -140,6 +148,50 @@ test('deleting a site confirms first, then posts', async () => {
 
   // totals follow the removal
   expect(text()).toContain('1 site ')
+})
+
+test('renaming posts the new subdomain and relabels the row', async () => {
+  const { calls, text } = await render({
+    sites: SITES,
+    totals: { sites: 2, files: 5, bytes: 1085780 },
+    // what /api/rename answers with
+    slug: 'quarterly',
+    linksInvalidated: true,
+  })
+
+  const trigger = host!.querySelector(
+    'button[aria-label="Change subdomain for a3f9c1d2e4b60718"]'
+  ) as HTMLElement
+  expect(trigger).not.toBeNull()
+
+  await act(async () => trigger.click())
+  expect(document.body.textContent).toContain('Change subdomain')
+
+  const input = document.querySelector('input[name="subdomain"]') as HTMLInputElement
+  expect(input.value).toBe('a3f9c1d2e4b60718')
+
+  // client-side validation rejects an invalid label without hitting the API
+  await act(async () => type(input, 'Not Valid'))
+  const submit = [...document.querySelectorAll('button')].find(
+    (b) => b.textContent?.trim() === 'Rename'
+  ) as HTMLElement
+  await act(async () => submit.click())
+  expect(calls.map((c) => c.path)).toEqual(['/api/list'])
+  expect(document.body.textContent).toContain('Lowercase letters')
+
+  await act(async () => type(input, 'quarterly'))
+  await act(async () => submit.click())
+
+  const req = calls.find((c) => c.path === '/api/rename')
+  expect(req?.body).toEqual({ slug: 'a3f9c1d2e4b60718', to: 'quarterly' })
+
+  // the row takes the new name locally — no refetch, same reason as delete
+  expect(text()).toContain('quarterly')
+  expect(text()).not.toContain('a3f9c1d2e4b60718')
+  expect(calls.filter((c) => c.path === '/api/list').length).toBe(1)
+  expect(host!.querySelector('tbody a')?.getAttribute('href')).toBe(
+    'https://quarterly.example.com/'
+  )
 })
 
 test('each row exposes a labelled access control', async () => {

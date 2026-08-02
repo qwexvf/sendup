@@ -258,6 +258,36 @@ async function writeMeta(env, slug, meta) {
   await env.SITES.put(`__index:${slug}`, '', { metadata: meta })
 }
 
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$/
+const RESERVED = new Set(['dash', 'www', 'api'])
+
+// KV has no rename, so every object is copied to the new prefix and the old one dropped.
+// One read + one write + one delete per file, which is why it is capped.
+const RENAME_MAX_FILES = 200
+
+async function renameSite(env, from, to) {
+  const names = []
+  let cursor
+  do {
+    const page = await env.SITES.list({ prefix: `${from}:`, cursor })
+    for (const k of page.keys) names.push(k.name)
+    cursor = page.list_complete ? null : page.cursor
+  } while (cursor)
+
+  if (names.length > RENAME_MAX_FILES) {
+    return { error: `too many files to rename here (${names.length} > ${RENAME_MAX_FILES})` }
+  }
+
+  for (const name of names) {
+    const rest = name.slice(from.length + 1)
+    const obj = await env.SITES.getWithMetadata(name, { type: 'arrayBuffer' })
+    if (obj.value === null) continue
+    await env.SITES.put(`${to}:${rest}`, obj.value, { metadata: obj.metadata ?? undefined })
+    await env.SITES.delete(name)
+  }
+  return { files: names.length }
+}
+
 async function deleteSite(env, slug) {
   let cursor
   let n = 0
@@ -336,6 +366,27 @@ async function handleDashboard(request, url, env, base) {
     case '/api/delete': {
       const files = await deleteSite(env, slug)
       return json({ ok: true, files })
+    }
+
+    case '/api/rename': {
+      const to = typeof body.to === 'string' ? body.to.trim().toLowerCase() : ''
+      if (!SLUG_RE.test(to)) {
+        return json({ error: 'name must be lowercase letters, digits and hyphens, 2-63 chars' }, 400)
+      }
+      if (RESERVED.has(to)) return json({ error: `"${to}" is reserved` }, 400)
+      if (to === slug) return json({ error: 'that is already its name' }, 400)
+
+      const meta = await siteMeta(env, slug)
+      if (!meta) return json({ error: 'no such site' }, 404)
+      if (await siteMeta(env, to)) return json({ error: `${to} is already taken` }, 409)
+
+      const moved = await renameSite(env, slug, to)
+      if (moved.error) return json({ error: moved.error }, 400)
+
+      await writeMeta(env, to, meta)
+      await env.SITES.delete(`__index:${slug}`)
+      // signed links are HMACed over the slug, so the old ones can never validate again
+      return json({ ok: true, slug: to, files: moved.files, linksInvalidated: Boolean(meta.link) })
     }
 
     case '/api/access': {

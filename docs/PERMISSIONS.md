@@ -48,6 +48,7 @@ the missing permission in the error, but this is the full map.
 | `publish` | `POST .../bulk/delete` (sweep) | Account > Workers KV Storage > Edit |
 | `list`, `link` | `GET .../keys` | Account > Workers KV Storage > Edit |
 | `rm` | `GET .../keys`, `POST .../bulk/delete` | Account > Workers KV Storage > Edit |
+| `rename` | `GET .../keys`, `GET .../values/:key`, `PUT .../bulk`, `POST .../bulk/delete` | Account > Workers KV Storage > Edit |
 | `admin` | `PUT .../bulk` | Account > Workers KV Storage > Edit |
 | `wrangler deploy` | upload script | Account > Workers Scripts > Edit |
 | `wrangler deploy` | bind `*.domain/*` | Zone > Workers Routes > Edit |
@@ -154,6 +155,7 @@ declining to set it up costs nothing but convenience.
 | Kill every share link for a site | `sendup publish <path> --rotate`, or **revoke** in the dashboard |
 | Change a page password | `sendup publish <path> --auth user:newpass` |
 | Take a page down | `sendup rm <slug>` |
+| Move a page to a different subdomain | `sendup rename <slug> <new>`, or the pencil button in the dashboard |
 
 Access changes are subject to the same ~60 second Workers KV read cache as content
 updates. A revoked link can still work for up to a minute at an edge that already served

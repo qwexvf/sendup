@@ -82,6 +82,7 @@ sendup publish page.html --name demo    # -> https://demo.example.com/
 sendup publish page.html --ttl 30       # deletes itself after 30 days
 sendup list
 sendup rm <slug>
+sendup rename <slug> <new-name>         # move a site to a different subdomain
 sendup token <TOKEN>                    # swap the stored API token, no API call
 ```
 
@@ -187,6 +188,8 @@ sendup admin --user you            # prints a generated password, once
 Then open `https://dash.example.com/` — same Worker, no extra deploy. It lists every
 site with its title, size, age and access mode, and lets you:
 
+- **rename the subdomain** — moves every file to the new prefix; the old URL stops
+  working at once, and any signed links die with it (the token is HMACed over the slug)
 - **switch access** between open / signed link / password, without republishing the
   files (the config lives on the site record, so a toggle is a single write)
 - **issue share links**, with or without a 7-day expiry, copied to the clipboard

@@ -61,6 +61,7 @@ immediate.
 ```bash
 sendup list        # every published site, newest first
 sendup rm <slug>   # delete a site and all its files
+sendup rename <slug> <new-name>   # move it to a different subdomain
 sendup link <slug> [--ttl DAYS]   # issue a share link for a --link site
 ```
 
