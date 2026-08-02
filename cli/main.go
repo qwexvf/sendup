@@ -1,4 +1,4 @@
-// sendup — publish static pages to <random>.example.com
+// sendup — publish static pages to a subdomain of a domain you control
 package main
 
 import (
@@ -455,10 +455,7 @@ func metaNumber(m map[string]any, key string) (float64, bool) {
 
 func cmdInit(args []string) {
 	cfg := loadConfig()
-	domain := "example.com"
-	if cfg.Domain != "" {
-		domain = cfg.Domain
-	}
+	domain := cfg.Domain
 	nsTitle := "sendup-sites"
 	skipDNS := false
 
@@ -484,6 +481,9 @@ func cmdInit(args []string) {
 		default:
 			die("unknown argument %s", args[i])
 		}
+	}
+	if domain == "" {
+		die("which domain? pass --domain example.com (it must already be a zone on your Cloudflare account)")
 	}
 	cfg.Domain = domain
 
@@ -528,8 +528,17 @@ func cmdInit(args []string) {
 		die("unexpected namespace listing: %v", err)
 	}
 	found := ""
+	// An id already in the config wins over a title match. Titles drift — renaming the
+	// tool once pointed a re-init at a brand new, empty namespace while the real data sat
+	// in the old one. The id is the thing that must not change.
 	for _, n := range namespaces {
-		if n.Title == nsTitle {
+		if n.ID == cfg.NamespaceID {
+			found = n.ID
+			nsTitle = n.Title
+		}
+	}
+	for _, n := range namespaces {
+		if found == "" && n.Title == nsTitle {
 			found = n.ID
 		}
 	}
@@ -558,18 +567,25 @@ func cmdInit(args []string) {
 	fmt.Printf("\nnext:\n  wrangler deploy   (needs Workers Scripts + Workers Routes on the token)\n")
 }
 
-// Point the checked-in wrangler config at this account's namespace and domain, so
-// `wrangler deploy` works straight after a clone without hand-editing.
+// Generate wrangler.jsonc from the checked-in template with this account's namespace and
+// domain, so `wrangler deploy` works straight after a clone. The generated file is
+// gitignored — the template in git stays domain-neutral.
 func patchWrangler(cfg *Config) {
 	const name = "wrangler.jsonc"
+	const tmpl = "wrangler.template.jsonc"
+
+	// prefer an existing generated config so hand edits survive a re-init
 	raw, err := os.ReadFile(name)
 	if err != nil {
-		fmt.Printf("\nwrangler %s not in this directory — set these by hand before deploying:\n"+
+		raw, err = os.ReadFile(tmpl)
+	}
+	if err != nil {
+		fmt.Printf("\nwrangler no %s or %s in this directory — set these by hand before deploying:\n"+
 			"           kv_namespaces[0].id = %s\n"+
 			"           routes[0].pattern   = *.%s/*\n"+
 			"           routes[0].zone_name = %s\n"+
 			"           vars.BASE_DOMAIN    = %s\n",
-			name, cfg.NamespaceID, cfg.Domain, cfg.Domain, cfg.Domain)
+			name, tmpl, cfg.NamespaceID, cfg.Domain, cfg.Domain, cfg.Domain)
 		return
 	}
 
@@ -583,13 +599,12 @@ func patchWrangler(cfg *Config) {
 		out = regexp.MustCompile(sub.re).ReplaceAllString(out, sub.repl)
 	}
 
-	if out == string(raw) {
-		return
-	}
+	// strip the template's leading explainer if we are generating from it
+	out = strings.TrimPrefix(out, "// Template. `sendup init` copies this to wrangler.jsonc with your account's values\n// filled in; wrangler.jsonc is gitignored so nobody's domain lands in the repo.\n")
 	if err := os.WriteFile(name, []byte(out), 0o644); err != nil {
 		die("cannot write %s: %v", name, err)
 	}
-	fmt.Printf("wrangler %s updated\n", name)
+	fmt.Printf("wrangler %s written for %s\n", name, cfg.Domain)
 }
 
 // AAAA 100:: proxied is the documented placeholder for hostnames served only by a Worker.
@@ -1185,7 +1200,7 @@ func cmdRm(args []string) {
 }
 
 func usage() {
-	fmt.Println(`sendup — publish static pages to *.example.com
+	fmt.Printf(`sendup — publish static pages to *.%s
 
   sendup publish <file|dir> [--name NAME] [--ttl DAYS]
                             [--auth [user:pass]] [--no-auth]
@@ -1197,14 +1212,13 @@ func usage() {
   sendup rename <slug> <new-name>
   sendup admin [--user NAME] [--password PASS]   set up the dashboard
   sendup token <TOKEN>                           swap the stored API token
-  sendup init [--token TOKEN] [--domain example.com] [--skip-dns]
+  sendup init --domain <your-domain> [--token TOKEN] [--skip-dns]
 
 A single .html file becomes the site root. A directory is uploaded as-is;
 index.html at its root becomes "/".
 
 The subdomain defaults to 16 random hex chars. --name picks it by hand, e.g.
---name camera-proposal serves https://camera-proposal.example.com/ (--slug is
-accepted as an alias).
+--name docs serves https://docs.<your-domain>/ (--slug is accepted as an alias).
 
 Publishing the same file or directory again reuses the subdomain it went to
 last time, so the URL you shared keeps working. Files removed since the last
@@ -1219,7 +1233,16 @@ Three ways to control who gets in, and they compose:
   --auth     HTTP Basic auth; bare --auth generates the credentials, prints once
 
 With both --link and --auth, either one gets you in. A republish keeps whatever
-the site already had; --no-auth and --no-link remove them.`)
+the site already had; --no-auth and --no-link remove them.
+`, domainOr("<your-domain>"))
+}
+
+// domainOr reports the configured domain, or a placeholder before `init` has run.
+func domainOr(fallback string) string {
+	if d := loadConfig().Domain; d != "" {
+		return d
+	}
+	return fallback
 }
 
 func main() {

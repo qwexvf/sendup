@@ -64,7 +64,7 @@ and `rm` deletes. There is no read-only mode worth configuring.
 grant write access to your DNS:
 
 ```bash
-sendup init --token <TOKEN> --skip-dns
+sendup init --domain example.com --token <TOKEN> --skip-dns
 ```
 
 Then add the record by hand in the dashboard:
@@ -91,8 +91,8 @@ So a reasonable split is: run `init` and `wrangler deploy` with a full token, de
 then swap in a KV-only token for daily use:
 
 ```bash
-sendup init --token <SETUP_TOKEN>
-CLOUDFLARE_API_TOKEN=<SETUP_TOKEN> npx wrangler deploy
+sendup init --domain example.com --token <SETUP_TOKEN>
+CLOUDFLARE_API_TOKEN=<SETUP_TOKEN> bun run deploy
 # delete the setup token in the dashboard, then:
 sendup token <KV_ONLY_TOKEN>
 ```
@@ -105,7 +105,7 @@ You will need a full token again to redeploy the Worker after changing `src/`. P
 inline rather than storing it:
 
 ```bash
-CLOUDFLARE_API_TOKEN=<SETUP_TOKEN> npx wrangler deploy
+CLOUDFLARE_API_TOKEN=<SETUP_TOKEN> bun run deploy
 ```
 
 That KV-only token can still delete every page you have published — Workers KV Edit is

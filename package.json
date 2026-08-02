@@ -3,8 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test/worker.test.mjs",
-    "build:dash": "cd dash && bun run build",
+    "test": "bun test test/ && cd dash && bun test",
+    "test:worker": "bun test test/",
+    "test:dash": "cd dash && bun test",
+    "build": "cd dash && bun run build",
     "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.118.0"
   }
 }

@@ -1,17 +1,18 @@
+// Template. `sendup init` copies this to wrangler.jsonc with your account's values
+// filled in; wrangler.jsonc is gitignored so nobody's domain lands in the repo.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "sendup",
   "main": "src/worker.js",
   "compatibility_date": "2026-08-01",
 
-  // no sendup.workers.dev — the wildcard route is the only entrypoint
+  // no *.workers.dev — the wildcard route is the only entrypoint
   "workers_dev": false,
   "routes": [{ "pattern": "*.example.com/*", "zone_name": "example.com" }],
 
   "vars": { "BASE_DOMAIN": "example.com" },
 
-  // id is filled in by `sendup init`
-  "kv_namespaces": [{ "binding": "SITES", "id": "06779da6940b431db6e566b4846d64db" }],
+  "kv_namespaces": [{ "binding": "SITES", "id": "__KV_NAMESPACE_ID__" }],
 
   "observability": { "enabled": true }
 }

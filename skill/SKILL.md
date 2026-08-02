@@ -1,11 +1,11 @@
 ---
 name: sendup
-description: Publish a static HTML page or a directory of static files to a random subdomain of example.com and return the URL. Use when the user asks to publish, host, deploy, or share a page, report, dashboard, mockup, or write-up on their own domain — phrasings like "put this on sendup", "publish this page", "give me a link for this", "host this HTML". Not for dynamic apps: there is no server, no database, and no build step.
+description: Publish a static HTML page or a directory of static files to a random subdomain of a domain you control and return the URL. Use when the user asks to publish, host, deploy, or share a page, report, dashboard, mockup, or write-up on their own domain — phrasings like "put this on sendup", "publish this page", "give me a link for this", "host this HTML". Not for dynamic apps: there is no server, no database, and no build step.
 ---
 
 # sendup
 
-Publishes static files to `https://<random>.example.com/`. One Cloudflare Worker reads
+Publishes static files to `https://<random>.<your-domain>/`. One Cloudflare Worker reads
 the subdomain off the `Host` header and serves the matching files out of KV.
 
 ## Publish
@@ -14,7 +14,7 @@ the subdomain off the `Host` header and serves the matching files out of KV.
 sendup publish report.html            # single file -> becomes /
 sendup publish ./site                 # directory, index.html at its root -> /
 sendup publish page.html --ttl 7      # auto-deletes after 7 days
-sendup publish page.html --name demo  # https://demo.example.com/ instead of random
+sendup publish page.html --name demo  # https://demo.<your-domain>/ instead of random
 sendup publish page.html --link       # only a signed link opens it, no password
 sendup publish page.html --link-ttl 7 # signed link that expires in 7 days
 sendup publish page.html --auth       # HTTP Basic auth, credentials generated
