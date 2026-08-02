@@ -12,6 +12,7 @@ import {
 } from '@cloudflare/kumo'
 import {
   ArrowClockwiseIcon,
+  ArrowsClockwiseIcon,
   CloudArrowUpIcon,
   LinkIcon,
   TrashIcon,
@@ -66,7 +67,7 @@ const ACCESS_VARIANT: Record<Access, 'orange' | 'teal' | 'green' | 'blue'> = {
   both: 'blue',
 }
 
-function DeleteDialog({ site, onDone }: { site: Site; onDone: () => void }) {
+function DeleteDialog({ site, onDeleted }: { site: Site; onDeleted: () => void }) {
   const toast = useKumoToastManager()
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -77,7 +78,9 @@ function DeleteDialog({ site, onDone }: { site: Site; onDone: () => void }) {
       const r = await api<{ files: number }>('delete', { slug: site.slug })
       toast.add({ title: `Deleted ${site.slug}`, description: `${r.files} files removed` })
       setOpen(false)
-      onDone()
+      // drop it locally rather than refetching: KV list is eventually consistent and
+      // would happily hand back the key we just deleted
+      onDeleted()
     } catch (e) {
       toast.add({ title: 'Delete failed', description: (e as Error).message, type: 'error' })
     } finally {
@@ -118,7 +121,15 @@ function DeleteDialog({ site, onDone }: { site: Site; onDone: () => void }) {
   )
 }
 
-function Row({ site, onChanged }: { site: Site; onChanged: () => void }) {
+function Row({
+  site,
+  onDeleted,
+  onAccess,
+}: {
+  site: Site
+  onDeleted: () => void
+  onAccess: (access: Access) => void
+}) {
   const toast = useKumoToastManager()
   const [busy, setBusy] = useState(false)
   const url = `https://${site.slug}.${BASE}/`
@@ -144,7 +155,7 @@ function Row({ site, onChanged }: { site: Site; onChanged: () => void }) {
         description: r.password ? `Login: ${r.password} (shown once)` : undefined,
         type: 'success',
       })
-      onChanged()
+      onAccess(mode as Access)
     })
 
   const copyLink = (days?: number) =>
@@ -235,7 +246,7 @@ function Row({ site, onChanged }: { site: Site; onChanged: () => void }) {
               </Button>
             </>
           )}
-          <DeleteDialog site={site} onDone={onChanged} />
+          <DeleteDialog site={site} onDeleted={onDeleted} />
         </div>
       </Table.Cell>
     </Table.Row>
@@ -262,6 +273,28 @@ export function App() {
     void load()
   }, [load])
 
+  // Cloudflare KV list is eventually consistent, so refetching straight after a mutation
+  // routinely returns the state we just changed. Apply the change locally instead; the
+  // Refresh button is there for when you actually want the server's view.
+  const dropSite = useCallback((slug: string) => {
+    setSites((prev) => {
+      if (!prev) return prev
+      const gone = prev.find((s) => s.slug === slug)
+      if (gone) {
+        setTotals((t) => ({
+          sites: t.sites - 1,
+          files: t.files - gone.files,
+          bytes: t.bytes - gone.bytes,
+        }))
+      }
+      return prev.filter((s) => s.slug !== slug)
+    })
+  }, [])
+
+  const setAccess = useCallback((slug: string, access: Access) => {
+    setSites((prev) => prev && prev.map((s) => (s.slug === slug ? { ...s, access } : s)))
+  }, [])
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-kumo pb-4">
@@ -271,13 +304,24 @@ export function App() {
             {totals.sites} site{totals.sites === 1 ? '' : 's'} · {totals.files} files on {BASE}
           </p>
         </div>
-        <div className="w-full sm:w-64">
-          <Meter
-            label="Storage"
-            value={totals.bytes}
-            max={GB}
-            customValue={`${formatBytes(totals.bytes)} of 1 GB`}
-          />
+        <div className="flex w-full items-end gap-3 sm:w-auto">
+          <div className="w-full sm:w-64">
+            <Meter
+              label="Storage"
+              value={totals.bytes}
+              max={GB}
+              customValue={`${formatBytes(totals.bytes)} of 1 GB`}
+            />
+          </div>
+          <Button
+            size="sm"
+            shape="square"
+            aria-label="Reload from the server"
+            title="Reload"
+            onClick={() => void load()}
+          >
+            <ArrowsClockwiseIcon />
+          </Button>
         </div>
       </header>
 
@@ -319,7 +363,12 @@ export function App() {
           </Table.Header>
           <Table.Body>
             {sites.map((s) => (
-              <Row key={s.slug} site={s} onChanged={() => void load()} />
+              <Row
+                key={s.slug}
+                site={s}
+                onDeleted={() => dropSite(s.slug)}
+                onAccess={(a) => setAccess(s.slug, a)}
+              />
             ))}
           </Table.Body>
         </Table>

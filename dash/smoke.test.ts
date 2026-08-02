@@ -130,4 +130,29 @@ test('deleting a site confirms first, then posts', async () => {
   await act(async () => confirm.click())
   const del = calls.find((c) => c.path === '/api/delete')
   expect(del?.body).toEqual({ slug: 'a3f9c1d2e4b60718' })
+
+  // The row must go away from local state. Refetching instead would ask KV for a list it
+  // is only eventually consistent about, and the deleted site would pop back.
+  expect(host!.querySelectorAll('tbody tr').length).toBe(1)
+  expect(text()).not.toContain('a3f9c1d2e4b60718')
+  expect(text()).toContain('demo')
+  expect(calls.filter((c) => c.path === '/api/list').length).toBe(1)
+
+  // totals follow the removal
+  expect(text()).toContain('1 site ')
+})
+
+test('each row exposes a labelled access control', async () => {
+  const { calls, text } = await render({
+    sites: SITES,
+    totals: { sites: 2, files: 5, bytes: 1085780 },
+  })
+  expect(text()).toContain('signed link')
+
+  const row = host!.querySelectorAll('tbody tr')[0]
+  const select = row.querySelector('[role="combobox"]') as HTMLElement
+  expect(select.getAttribute('aria-label')).toBe('Access for a3f9c1d2e4b60718')
+
+  // only the initial list has been fetched so far
+  expect(calls.map((c) => c.path)).toEqual(['/api/list'])
 })
