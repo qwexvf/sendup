@@ -49,7 +49,7 @@ const html = `<!doctype html>
 <style>${css}</style>
 <style>${typography}</style>
 </head>
-<body class="bg-kumo text-kumo">
+<body class="bg-kumo-canvas text-kumo-default">
 <div id="root"></div>
 <script>window.__SENDUP_BASE__=${JSON.stringify('__BASE__')}</script>
 <script>${safe(js)}</script>

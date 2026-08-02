@@ -516,7 +516,7 @@ export function App() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-x-8 gap-y-4 border-b border-kumo pb-5">
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-x-8 gap-y-4 border-b border-kumo-line pb-5">
         {/* title and its subtitle belong together, so they sit tighter than the row gap */}
         <div className="grid gap-1">
           <Text as="h1" variant="heading3">
