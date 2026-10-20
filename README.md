@@ -40,7 +40,7 @@ served.
 Requires [Bun](https://bun.sh), Go, and a domain on Cloudflare. No Node, no npm.
 
 ```bash
-git clone https://github.com/<you>/sendup && cd sendup
+git clone https://github.com/qwexvf/sendup && cd sendup
 bun install
 (cd cli && go build -o sendup .) && ln -s "$PWD/cli/sendup" ~/.local/bin/sendup
 ```
