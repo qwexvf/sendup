@@ -9,7 +9,7 @@ https://a3f9c1d2e4b60718.example.com/
 ```
 
 It's the "share this page with a link" part of Claude Artifacts, on infrastructure you
-own — your domain, your Cloudflare account, no third party in the loop. Single-file
+own: your domain, your Cloudflare account, no third party in the loop. Single-file
 pages, whole directories, drafts you want gone in a week, client documents behind a
 password.
 
@@ -52,12 +52,12 @@ Create a **user-owned** API token at
 | ------- | ------------------ | ----- | ----------------------------------- |
 | Account | Workers KV Storage | Edit  | `init`, `publish`, `rm`             |
 | Account | Workers Scripts    | Edit  | `wrangler deploy`                   |
-| Zone    | Workers Routes     | Edit  | `wrangler deploy` — binds the route |
+| Zone    | Workers Routes     | Edit  | `wrangler deploy` (binds the route) |
 | Zone    | Zone               | Read  | `init` (zone + account lookup)      |
-| Zone    | DNS                | Edit  | wildcard record — optional          |
+| Zone    | DNS                | Edit  | wildcard record (optional)          |
 
 Scope Zone Resources to your domain. Account-owned tokens (Manage Account → API Tokens)
-**cannot hold zone permissions at all** — if the editor shows no Zone section, that's
+**cannot hold zone permissions at all**. If the editor shows no Zone section, that's
 why.
 
 Only the first row is needed day to day. See **[docs/PERMISSIONS.md](docs/PERMISSIONS.md)**
@@ -71,7 +71,7 @@ CLOUDFLARE_API_TOKEN=<TOKEN> bun run deploy
 
 `init` creates the KV namespace, adds the wildcard DNS record, and writes
 `~/.config/sendup/config.json` (mode 0600). It also generates **`wrangler.jsonc`** from
-`wrangler.template.jsonc` with your domain and namespace filled in — the generated file
+`wrangler.template.jsonc` with your domain and namespace filled in. The generated file
 is gitignored, so no one's domain ends up in the repo. If your token lacks
 `Zone > DNS > Edit`, `init` prints the record to add by hand and carries on;
 `--skip-dns` does the same without trying.
@@ -103,19 +103,19 @@ record in KV, keyed on the absolute source path, so it resolves from any machine
 pointed at the same account.
 
 - files deleted since the last publish are swept, so removed pages stop serving
-- existing credentials are carried over — a republish never silently unprotects a page
+- existing credentials carry over, so a republish never silently unprotects a page
 - `--new` forces a fresh subdomain and repoints the source at it
 - `--name NAME` pins the subdomain (`--slug` is an alias). Valid hostname label:
-  lowercase letters, digits, hyphens, 2–63 chars
+  lowercase letters, digits, hyphens, 2-63 chars
 
 > **Updates take up to ~60s** to appear at an edge that already served the old version.
 > Workers KV caches reads for 60 seconds and that is also the floor, so it cannot be
-> tuned down. First-time publishes are immediate. This applies to access changes too —
+> tuned down. First-time publishes are immediate. This applies to access changes too:
 > adding a password to a live page leaves it briefly open.
 
 ### Seeing what changed elsewhere
 
-Renames follow automatically — the source-path mapping lives in KV, so publishing the
+Renames follow automatically. The source-path mapping lives in KV, so publishing the
 same file after someone renamed it in the dashboard lands on the new subdomain without
 any local sync. What you cannot otherwise see is *that it moved*. `sendup pull` reports
 it:
@@ -131,7 +131,7 @@ unchanged  /home/you/notes/index.html
 ```
 
 It compares a local record of what this machine published (`~/.config/sendup/published.json`,
-slug only — no content) against the server, and reports `renamed`, `gone`, `new here` or
+slug only, no content) against the server, and reports `renamed`, `gone`, `new here` or
 `unchanged`. Pass a path to check just one.
 
 ### Checking the setup
@@ -159,7 +159,7 @@ skipped, not treated as failures. Exits non-zero if anything is wrong; `--fix`
 regenerates `wrangler.jsonc`.
 
 Worth running after changing anything in the Cloudflare dashboard by hand. A stale
-namespace id is the nasty one — every command keeps working, quietly against an empty
+namespace id is the nasty one: every command keeps working, quietly against an empty
 store, while the real data sits in a namespace nothing points at.
 
 ## Who can read it
@@ -170,13 +170,13 @@ Three mechanisms. They compose, and holding **any** of them gets you in.
 
 The slug is 64 bits of randomness. Nothing lists it, and every response carries
 `X-Robots-Tag: noindex, nofollow, noarchive`. Anyone with the link opens it instantly,
-no prompt — the same model as "anyone with the link" sharing elsewhere.
+no prompt. It's the same model as "anyone with the link" sharing elsewhere.
 
 This is **unlisted, not secret**. Fine for a draft; not for anything that matters if the
 URL leaks. Note that `--name` trades this away: a chosen name is guessable, so pair it
 with one of the below.
 
-### 2. Signed links — `--link`
+### 2. Signed links: `--link`
 
 ```console
 $ sendup publish proposal.html --link --link-ttl 7
@@ -186,7 +186,7 @@ https://5f2a....example.com/?k=1754131200.9c1e4f7a2b8d6e0f3a5c7b9d1e2f4a6b
   link expires 2026-08-09 12:00 UTC
 ```
 
-The page opens only for a valid signed link. No password to type — the recipient clicks
+The page opens only for a valid signed link. No password to type; the recipient clicks
 and reads. The Worker verifies the token, sets an `HttpOnly; Secure; SameSite=Lax`
 cookie, and redirects to the clean URL so the token stops riding along in the address
 bar and in anything they copy onward.
@@ -203,7 +203,7 @@ sendup publish ... --rotate        # new secret; every link issued so far dies
 
 Issuing links doesn't re-upload anything.
 
-### 3. Password — `--auth`
+### 3. Password: `--auth`
 
 ```console
 $ sendup publish proposal.html --auth
@@ -211,8 +211,8 @@ $ sendup publish proposal.html --auth
   not recoverable later — republish to change it
 ```
 
-HTTP Basic auth. `--auth user:pass` sets your own. Only a salted SHA-256 reaches KV —
-the password is printed once and never stored, so changing it means republishing. The
+HTTP Basic auth. `--auth user:pass` sets your own. Only a salted SHA-256 reaches KV.
+The password is printed once and never stored, so changing it means republishing. The
 Worker recomputes the hash and compares in constant time.
 
 Strongest of the three: survives the URL leaking entirely. Costs the recipient a
@@ -222,14 +222,14 @@ password prompt.
 
 Access config lives on the site record only, never on individual files, so changing it is
 a single write rather than one per file. The Worker fetches that record in parallel with
-the file, which costs one extra KV read per request — halving the effective free-tier
+the file, which costs one extra KV read per request. That halves the effective free-tier
 read budget to roughly 50,000 page views a day.
 
 The record is also what gates a miss: without it, an outsider could map which paths exist
 by watching 404 versus 403. Gated responses are sent `Cache-Control: private, no-store`
 and `Vary: Authorization, Cookie`.
 
-Everything here rests on TLS, and Cloudflare terminates TLS — so Cloudflare can see your
+Everything here rests on TLS, and Cloudflare terminates TLS, so Cloudflare can see your
 pages in plaintext. This is access control for documents, not a secrets store. Don't
 publish credentials or personal data.
 
@@ -239,10 +239,10 @@ publish credentials or personal data.
 sendup admin --user you            # prints a generated password, once
 ```
 
-Then open `https://dash.example.com/` — same Worker, no extra deploy. It lists every
+Then open `https://dash.example.com/`. Same Worker, no extra deploy. It lists every
 site with its title, size, age and access mode, and lets you:
 
-- **rename the subdomain** — moves every file to the new prefix; the old URL stops
+- **rename the subdomain**: moves every file to the new prefix; the old URL stops
   working at once, and any signed links die with it (the token is HMACed over the slug)
 - **switch access** between open / signed link / password, without republishing the
   files (the config lives on the site record, so a toggle is a single write)
@@ -252,8 +252,8 @@ site with its title, size, age and access mode, and lets you:
 - watch storage against the 1 GB free-tier ceiling
 
 Built with **React 19 + [Kumo](https://kumo-ui.com)** (Cloudflare's component library) and
-bundled by **Bun**. The build emits one self-contained HTML document — script and styles
-inlined — into `src/dashboard-html.js`, which the Worker serves directly. 193 KB gzipped,
+bundled by **Bun**. The build emits one self-contained HTML document (script and styles
+inlined) into `src/dashboard-html.js`, which the Worker serves directly. 193 KB gzipped,
 no separate asset hosting, no runtime CDN fetch.
 
 ```bash
@@ -276,13 +276,13 @@ what stands in front of it:
 - HTTP Basic auth against a salted SHA-256 in KV, compared in constant time. It is a
   separate credential from any page password.
 - Browsers replay Basic auth on cross-site requests, so every mutating call also
-  requires an `X-Sendup: 1` header — which a cross-origin page cannot set without a CORS
-  preflight the Worker never answers — and rejects a non-same-origin `Sec-Fetch-Site`.
+  requires an `X-Sendup: 1` header (a cross-origin page cannot set it without a CORS
+  preflight, which the Worker never answers) and rejects a non-same-origin `Sec-Fetch-Site`.
 - Responses are `no-store`, the page is `noindex`, and a strict CSP blocks any external
   fetch.
 
 If you would rather not have a delete endpoint on the public internet at all, don't run
-`sendup admin` — every action above also exists as a CLI command, and without the
+`sendup admin`. Every action above also exists as a CLI command, and without the
 `__admin` record the dashboard returns 503 to everyone.
 
 ## Limits
@@ -298,13 +298,13 @@ Cloudflare free tier:
 | Value size      | 25 MB per file                 |
 | Worker requests | 100,000/day                    |
 
-One file is one KV write, so the daily write budget is the real ceiling — roughly a
+One file is one KV write, so the daily write budget is the real ceiling: roughly a
 thousand files a day.
 
 ## Claude Code
 
-`skill/SKILL.md` teaches Claude Code to publish for you — "put this on sendup", "give me
-a link for this".
+`skill/SKILL.md` teaches Claude Code to publish for you when you say things
+like "put this on sendup" or "give me a link for this".
 
 ```bash
 ln -s "$PWD/skill" ~/.claude/skills/sendup
@@ -342,4 +342,4 @@ bun run deploy        # wrangler deploy
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
